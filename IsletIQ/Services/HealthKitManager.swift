@@ -1,0 +1,374 @@
+import Foundation
+import HealthKit
+
+struct SleepData {
+    let bedtime: Date
+    let wakeTime: Date
+    let totalMinutes: Double
+    let deepMinutes: Double
+    let remMinutes: Double
+    let coreMinutes: Double
+    let awakeMinutes: Double
+
+    var totalHours: Double { totalMinutes / 60.0 }
+    var quality: String {
+        if totalHours >= 7.5 { return "Good" }
+        if totalHours >= 6 { return "Fair" }
+        return "Poor"
+    }
+}
+
+@Observable
+final class HealthKitManager {
+    let store = HKHealthStore()
+    var isAuthorized = false
+    var recentMeals: [MealEntry] = []
+
+    struct MealEntry: Identifiable {
+        let id = UUID()
+        let name: String
+        let carbs: Double
+        let calories: Double
+        let date: Date
+        let sample: HKSample? // Keep reference for deletion
+    }
+    var lastSleep: SleepData?
+    var stepsToday: Int = 0
+    var activeCaloriesToday: Double = 0
+
+    // Types we need
+    private let shareTypes: Set<HKSampleType> = [
+        HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
+        HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
+        HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!,
+    ]
+
+    private let readTypes: Set<HKObjectType> = [
+        HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+        HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
+        HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
+        HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!,
+        HKQuantityType.quantityType(forIdentifier: .stepCount)!,
+        HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
+        HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
+    ]
+
+    // MARK: - Authorization
+
+    func requestAuthorization() async {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            print("HealthKit not available on this device")
+            return
+        }
+        do {
+            try await store.requestAuthorization(toShare: shareTypes, read: readTypes)
+            await MainActor.run { isAuthorized = true }
+        } catch {
+            print("HealthKit auth failed: \(error)")
+            // Try read-only if share fails
+            do {
+                try await store.requestAuthorization(toShare: [], read: readTypes)
+                await MainActor.run { isAuthorized = true }
+            } catch {
+                print("HealthKit read-only auth also failed: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Log Meal
+
+    func logMeal(name: String, calories: Double, carbs: Double, protein: Double, fat: Double) async {
+        let date = Date()
+        let metadata: [String: Any] = [HKMetadataKeyFoodType: name]
+
+        var samples: [HKQuantitySample] = []
+
+        if carbs > 0 {
+            samples.append(HKQuantitySample(
+                type: HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+                quantity: HKQuantity(unit: .gram(), doubleValue: carbs),
+                start: date, end: date, metadata: metadata
+            ))
+        }
+        if calories > 0 {
+            samples.append(HKQuantitySample(
+                type: HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+                quantity: HKQuantity(unit: .kilocalorie(), doubleValue: calories),
+                start: date, end: date, metadata: metadata
+            ))
+        }
+        if protein > 0 {
+            samples.append(HKQuantitySample(
+                type: HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+                quantity: HKQuantity(unit: .gram(), doubleValue: protein),
+                start: date, end: date, metadata: metadata
+            ))
+        }
+        if fat > 0 {
+            samples.append(HKQuantitySample(
+                type: HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
+                quantity: HKQuantity(unit: .gram(), doubleValue: fat),
+                start: date, end: date, metadata: metadata
+            ))
+        }
+
+        guard !samples.isEmpty else { return }
+
+        do {
+            try await store.save(samples)
+            print("HealthKit: logged \(name) - \(carbs)g carbs, \(calories) kcal")
+            // Refresh meals list
+            await fetchRecentMeals()
+            await fetchRecentMeals()
+        } catch {
+            print("HealthKit save failed: \(error)")
+        }
+    }
+
+    // MARK: - Log Glucose
+
+    func logGlucose(value: Double, date: Date = .now) async {
+        let sample = HKQuantitySample(
+            type: HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
+            quantity: HKQuantity(unit: HKUnit(from: "mg/dL"), doubleValue: value),
+            start: date, end: date
+        )
+        do {
+            try await store.save(sample)
+            print("HealthKit: logged glucose \(value) mg/dL")
+        } catch {
+            print("HealthKit glucose save failed: \(error)")
+        }
+    }
+
+    // MARK: - Log Insulin
+
+    func logInsulin(units: Double, date: Date = .now, isBasal: Bool = false) async {
+        let insulinType = HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!
+        let metadata: [String: Any] = [
+            HKMetadataKeyInsulinDeliveryReason: isBasal
+                ? HKInsulinDeliveryReason.basal.rawValue
+                : HKInsulinDeliveryReason.bolus.rawValue
+        ]
+        let sample = HKQuantitySample(
+            type: insulinType,
+            quantity: HKQuantity(unit: .internationalUnit(), doubleValue: units),
+            start: date, end: date,
+            metadata: metadata
+        )
+        do {
+            try await store.save(sample)
+            print("HealthKit: logged \(units)u insulin (\(isBasal ? "basal" : "bolus"))")
+        } catch {
+            print("HealthKit insulin save failed: \(error)")
+        }
+    }
+
+    // MARK: - Fetch Recent Meals (query carbs directly, not food correlations)
+
+    func fetchRecentMeals() async {
+        guard let carbType = HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates),
+              let calType = HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed) else { return }
+        let startDate = Calendar.current.date(byAdding: .day, value: -7, to: .now)!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: .now, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        // Fetch calorie samples first to build a lookup by timestamp
+        let calSamples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: calType,
+                predicate: predicate,
+                limit: 50,
+                sortDescriptors: [sortDescriptor]
+            ) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(query)
+        }
+
+        // Build lookup: match calories to carbs by timestamp (within 2 seconds) and food name
+        let calLookup: [(date: Date, name: String, cals: Double)] = calSamples.map { s in
+            (date: s.startDate,
+             name: s.metadata?[HKMetadataKeyFoodType] as? String ?? "",
+             cals: s.quantity.doubleValue(for: .kilocalorie()))
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(
+                sampleType: carbType,
+                predicate: predicate,
+                limit: 30,
+                sortDescriptors: [sortDescriptor]
+            ) { _, samples, error in
+                guard let carbSamples = samples as? [HKQuantitySample] else {
+                    continuation.resume()
+                    return
+                }
+
+                let meals: [MealEntry] = carbSamples.map { sample in
+                    let name = sample.metadata?[HKMetadataKeyFoodType] as? String ?? "Meal"
+                    let carbs = sample.quantity.doubleValue(for: .gram())
+                    // Find matching calorie entry by timestamp and name
+                    let matchedCals = calLookup.first { cal in
+                        abs(cal.date.timeIntervalSince(sample.startDate)) < 2 &&
+                        (cal.name == name || cal.name.isEmpty || name == "Meal")
+                    }?.cals ?? 0
+                    return MealEntry(name: name, carbs: carbs, calories: matchedCals, date: sample.startDate, sample: sample)
+                }
+
+                Task { @MainActor in
+                    self.recentMeals = meals
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Delete Meal
+
+    func deleteMeal(_ meal: MealEntry) async {
+        guard let sample = meal.sample else { return }
+        do {
+            try await store.delete(sample)
+            await fetchRecentMeals()
+            print("HealthKit: deleted meal \(meal.name)")
+        } catch {
+            print("HealthKit delete failed: \(error)")
+        }
+    }
+
+    // MARK: - Fetch Sleep
+
+    func fetchLastSleep() async {
+        let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
+        let startDate = Calendar.current.date(byAdding: .day, value: -2, to: .now)!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: .now, options: .strictStartDate)
+        let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(
+                sampleType: sleepType,
+                predicate: predicate,
+                limit: 100,
+                sortDescriptors: [sortDescriptor]
+            ) { _, samples, _ in
+                guard let samples = samples as? [HKCategorySample], !samples.isEmpty else {
+                    continuation.resume()
+                    return
+                }
+
+                // Group by sleep session — find the most recent night
+                var totalSleep = 0.0
+                var deep = 0.0
+                var rem = 0.0
+                var core = 0.0
+                var awake = 0.0
+                var earliest = Date.distantFuture
+                var latest = Date.distantPast
+
+                for sample in samples {
+                    let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
+                    if sample.startDate < earliest { earliest = sample.startDate }
+                    if sample.endDate > latest { latest = sample.endDate }
+
+                    switch sample.value {
+                    case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
+                        deep += duration; totalSleep += duration
+                    case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
+                        rem += duration; totalSleep += duration
+                    case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
+                        core += duration; totalSleep += duration
+                    case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
+                        core += duration; totalSleep += duration
+                    case HKCategoryValueSleepAnalysis.awake.rawValue:
+                        awake += duration
+                    default:
+                        break
+                    }
+                }
+
+                if totalSleep > 0 {
+                    let sleep = SleepData(
+                        bedtime: earliest,
+                        wakeTime: latest,
+                        totalMinutes: totalSleep,
+                        deepMinutes: deep,
+                        remMinutes: rem,
+                        coreMinutes: core,
+                        awakeMinutes: awake
+                    )
+                    Task { @MainActor in
+                        self.lastSleep = sleep
+                        continuation.resume()
+                    }
+                } else {
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Fetch Steps & Active Calories
+
+    func fetchActivityToday() async {
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: .now, options: .strictStartDate)
+
+        // Steps
+        if let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let query = HKStatisticsQuery(quantityType: stepType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+                    let steps = Int(result?.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+                    Task { @MainActor in
+                        self.stepsToday = steps
+                        continuation.resume()
+                    }
+                }
+                store.execute(query)
+            }
+        }
+
+        // Active calories
+        if let calType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let query = HKStatisticsQuery(quantityType: calType, quantitySamplePredicate: predicate, options: .cumulativeSum) { _, result, _ in
+                    let cals = result?.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                    Task { @MainActor in
+                        self.activeCaloriesToday = cals
+                        continuation.resume()
+                    }
+                }
+                store.execute(query)
+            }
+        }
+    }
+
+    // MARK: - Fetch All Health Data
+
+    func fetchAll() async {
+        await fetchRecentMeals()
+        await fetchLastSleep()
+        await fetchActivityToday()
+    }
+
+    // MARK: - Observe New Food Entries
+
+    func startObservingMeals(onChange: @escaping () -> Void) {
+        let foodType = HKCorrelationType.correlationType(forIdentifier: .food)!
+        let query = HKObserverQuery(sampleType: foodType, predicate: nil) { _, completionHandler, error in
+            if error == nil {
+                onChange()
+            }
+            completionHandler()
+        }
+        store.execute(query)
+        store.enableBackgroundDelivery(for: foodType, frequency: .immediate) { _, _ in }
+    }
+}

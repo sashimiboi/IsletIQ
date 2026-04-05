@@ -10,71 +10,222 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @State private var showingLogEntry = false
+    @State private var showingMealLog = false
+    @State private var showingLogInsulin = false
+    @State private var hasSeeded = false
+    @State private var dexcomManager = DexcomManager()
+    @State private var healthKit = HealthKitManager()
+    @State private var notifications = NotificationManager()
+    private let watchSync = WatchSyncManager.shared
 
     var body: some View {
-        NavigationViewWrapper {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-#if os(macOS)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-#endif
-            .toolbar {
-#if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    EditButton()
-                }
-#endif
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
-            }
-        }
-    }
-}
-
-fileprivate struct NavigationViewWrapper<Content: View>: View {
-    let content: () -> Content
-
-    var body: some View {
-#if os(macOS)
+        #if os(macOS)
         NavigationSplitView {
-            content()
+            sidebarContent
         } detail: {
-            Text("Select an item")
+            DashboardView(dexcomManager: dexcomManager)
         }
-#else
-        content()
-#endif
+        .frame(minWidth: 700, minHeight: 500)
+        .onAppear(perform: seedIfNeeded)
+        .sheet(isPresented: $showingLogEntry) {
+            LogEntryView()
+        }
+        #else
+        TabView {
+            NavigationStack {
+                DashboardView(dexcomManager: dexcomManager)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Menu {
+                                Button { showingLogEntry = true } label: {
+                                    Label("Log Glucose", systemImage: "drop.fill")
+                                }
+                                Button { showingMealLog = true } label: {
+                                    Label("Log Meal", systemImage: "fork.knife")
+                                }
+                                Button { showingLogInsulin = true } label: {
+                                    Label("Log Insulin", systemImage: "syringe")
+                                }
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(Theme.primary)
+                            }
+                        }
+                    }
+            }
+            .tabItem {
+                Label("CGM", systemImage: "waveform.path.ecg")
+            }
+
+            NavigationStack {
+                NutritionView(healthKit: healthKit)
+            }
+            .tabItem {
+                Label("Health", systemImage: "heart.text.square")
+            }
+
+            NavigationStack {
+                AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit)
+            }
+            .tabItem {
+                Label("Agent", systemImage: "sparkles")
+            }
+
+            NavigationStack {
+                SupplyTrackerView()
+            }
+            .tabItem {
+                Label("Supplies", systemImage: "shippingbox")
+            }
+
+            NavigationStack {
+                SettingsView(dexcomManager: dexcomManager)
+            }
+            .tabItem {
+                Label("More", systemImage: "ellipsis.circle")
+            }
+        }
+        .tint(Theme.primary)
+        .onAppear {
+            seedIfNeeded()
+            // Delay HealthKit auth so it doesn't compete with other startup tasks
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                await healthKit.requestAuthorization()
+            }
+            if dexcomManager.isLoggedIn {
+                Task {
+                    await dexcomManager.fetchLatest()
+                    dexcomManager.startAutoRefresh()
+                }
+            }
+            // Notifications
+            Task {
+                await notifications.requestAuthorization()
+                notifications.scheduleMealReminders()
+            }
+        }
+        // Check glucose for alerts + sync to watch when readings update
+        .onChange(of: dexcomManager.liveReadings.count) {
+            if let latest = dexcomManager.liveReadings.first {
+                notifications.checkGlucose(value: latest.safeValue, trend: latest.trendArrow)
+                notifications.checkSensor(daysRemaining: MockData.sensorDaysRemaining)
+                notifications.checkPump(reservoirUnits: MockData.reservoirUnits, podDaysRemaining: 2)
+
+                // Sync to Apple Watch via Bluetooth
+                let spark = Array(dexcomManager.liveReadings.prefix(6).reversed().map(\.safeValue))
+                let allVals = dexcomManager.liveReadings.map(\.safeValue)
+                let avg = allVals.isEmpty ? 0 : allVals.reduce(0, +) / allVals.count
+                let inRange = allVals.filter { $0 >= 70 && $0 <= 180 }.count
+                let tir = allVals.isEmpty ? 0 : Int(Double(inRange) / Double(allVals.count) * 100)
+                let status: String = latest.safeValue < 70 ? "Low" : latest.safeValue <= 180 ? "In Range" : latest.safeValue <= 250 ? "High" : "Urgent High"
+                let color: String = latest.safeValue < 70 ? "low" : latest.safeValue <= 180 ? "normal" : latest.safeValue <= 250 ? "elevated" : "high"
+
+                watchSync.syncGlucose(
+                    value: latest.safeValue,
+                    trend: latest.trendArrow.rawValue,
+                    trendSymbol: latest.trendArrow.symbol,
+                    status: status,
+                    statusColor: color,
+                    sparkline: spark,
+                    tir: tir,
+                    avg: avg,
+                    readingCount: allVals.count
+                )
+            }
+        }
+        .sheet(isPresented: $showingLogEntry) {
+            LogEntryView()
+        }
+        .sheet(isPresented: $showingMealLog) {
+            LogMealView(healthKit: healthKit)
+        }
+        .sheet(isPresented: $showingLogInsulin) {
+            LogInsulinView(healthKit: healthKit)
+        }
+        #endif
+    }
+
+    #if os(macOS)
+    private var sidebarContent: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image("IsletLogo")
+                    .resizable()
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                Text("IsletIQ")
+                    .font(.headline)
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+
+            List {
+                NavigationLink {
+                    DashboardView(dexcomManager: dexcomManager)
+                } label: {
+                    Label("CGM", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                NavigationLink {
+                    PumpView()
+                } label: {
+                    Label("Pump", systemImage: "cross.vial.fill")
+                }
+                NavigationLink {
+                    AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit)
+                } label: {
+                    Label("Agent", systemImage: "brain.head.profile.fill")
+                }
+                NavigationLink {
+                    MarketplaceView()
+                } label: {
+                    Label("Apps", systemImage: "square.grid.2x2.fill")
+                }
+                NavigationLink {
+                    HistoryView()
+                } label: {
+                    Label("History", systemImage: "clock.arrow.circlepath")
+                }
+                NavigationLink {
+                    SettingsView(dexcomManager: dexcomManager)
+                } label: {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
+            }
+            .listStyle(.sidebar)
+        }
+        .navigationSplitViewColumnWidth(min: 180, ideal: 220)
+        .toolbar {
+            ToolbarItem {
+                Button { showingLogEntry = true } label: {
+                    Label("Log Reading", systemImage: "plus")
+                }
+            }
+        }
+    }
+    #endif
+
+    private func seedIfNeeded() {
+        guard !hasSeeded else { return }
+        hasSeeded = true
+
+        let descriptor = FetchDescriptor<GlucoseReading>()
+        let count = (try? modelContext.fetchCount(descriptor)) ?? 0
+        guard count == 0 else { return }
+
+        for reading in MockData.glucoseReadings() {
+            modelContext.insert(reading)
+        }
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
+        .modelContainer(for: GlucoseReading.self, inMemory: true)
 }

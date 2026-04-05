@@ -2,9 +2,32 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIBackgroundModes</key>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>IsletIQ uses speech recognition to let you talk to your diabetes assistant.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>IsletIQ needs microphone access for voice input to the agent.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>IsletIQ needs to read your health data to show glucose, insulin, and meal history.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>IsletIQ needs to log meals, glucose readings, and insulin deliveries to Apple Health.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>IsletIQ uses the camera to photograph food and supplies for the AI agent.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>IsletIQ connects to your local AI service for diabetes management agents.</string>
+	<key>NSBonjourServices</key>
 	<array>
-		<string>remote-notification</string>
+		<string>_http._tcp</string>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.isletiq.refresh</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
