@@ -89,8 +89,10 @@ struct ContentView: View {
         }
         .tint(Theme.primary)
         .onAppear {
-            seedIfNeeded()
-            // Delay HealthKit auth so it doesn't compete with other startup tasks
+            // Seed in background so it doesn't block UI
+            Task.detached(priority: .background) {
+                await MainActor.run { seedIfNeeded() }
+            }
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 await healthKit.requestAuthorization()
@@ -99,12 +101,16 @@ struct ContentView: View {
                 Task {
                     await dexcomManager.fetchLatest()
                     dexcomManager.startAutoRefresh()
-                    // Sync to watch immediately after first fetch
                     syncToWatch()
                 }
             } else {
-                // Even without Dexcom, sync CSV data to watch
                 syncToWatch()
+            }
+            // Push sleep and meals after HealthKit loads
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                await pushSleepToBackend()
+                await pushMealsToBackend()
             }
             // Notifications
             Task {
@@ -186,10 +192,54 @@ struct ContentView: View {
             readingCount: allVals.count
         )
 
-        // Push CGM data to backend for watch to read
+        // Push CGM + sleep data to backend for watch to read
         Task {
             await pushCGMToBackend(value: latest.value, trend: latest.trend, status: status, statusColor: color, sparkline: spark, tir: tir, avg: avg, readingCount: allVals.count)
+            await pushSleepToBackend()
+            await pushMealsToBackend()
         }
+    }
+
+    private func pushSleepToBackend() async {
+        guard let sleep = healthKit.lastSleep else { return }
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/sleep/push") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let segments = sleep.segments.map { seg -> [String: Any] in
+            ["stage": seg.stage.rawValue,
+             "start": seg.start.timeIntervalSince1970,
+             "end": seg.end.timeIntervalSince1970,
+             "minutes": seg.durationMinutes]
+        }
+
+        let body: [String: Any] = [
+            "totalHours": sleep.totalHours,
+            "quality": sleep.quality,
+            "deepMinutes": sleep.deepMinutes,
+            "remMinutes": sleep.remMinutes,
+            "coreMinutes": sleep.coreMinutes,
+            "awakeMinutes": sleep.awakeMinutes,
+            "bedtime": sleep.bedtime.timeIntervalSince1970,
+            "wakeTime": sleep.wakeTime.timeIntervalSince1970,
+            "segments": segments,
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: request)
+    }
+
+    private func pushMealsToBackend() async {
+        let meals = healthKit.recentMeals.filter { Calendar.current.isDateInToday($0.date) }
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/meals/push") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let mealsData = meals.map { m -> [String: Any] in
+            ["name": m.name, "carbs": Int(m.carbs), "calories": Int(m.calories)]
+        }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["meals": mealsData])
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     private func pushCGMToBackend(value: Int, trend: TrendArrow, status: String, statusColor: String, sparkline: [Int], tir: Int, avg: Int, readingCount: Int) async {

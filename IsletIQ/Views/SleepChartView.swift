@@ -1,22 +1,21 @@
 import SwiftUI
 
-/// Sleep stages timeline chart - Apple Sleep app style with STD principles
 struct SleepChartView: View {
     let sleep: SleepData
     @State private var selectedSegment: SleepSegment?
 
     private let stageColors: [SleepStage: Color] = [
-        .awake: Color.orange.opacity(0.7),
-        .rem: Color(red: 0.4, green: 0.6, blue: 0.9),
-        .core: Color(red: 0.25, green: 0.4, blue: 0.75),
-        .deep: Color(red: 0.15, green: 0.2, blue: 0.55),
+        .awake: Color(red: 0.9, green: 0.35, blue: 0.3),
+        .rem: Color(red: 0.55, green: 0.75, blue: 0.95),
+        .core: Color(red: 0.25, green: 0.45, blue: 0.9),
+        .deep: Color(red: 0.4, green: 0.3, blue: 0.8),
     ]
 
     private let stageLabels: [SleepStage] = [.awake, .rem, .core, .deep]
-    private let labelW: CGFloat = 40
+    private let labelW: CGFloat = 42
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             GeometryReader { geo in
                 let w = geo.size.width
                 let h = geo.size.height
@@ -25,167 +24,137 @@ struct SleepChartView: View {
                 let wakeTime = sleep.wakeTime.timeIntervalSince1970
                 let timeRange = max(1, wakeTime - bedtime)
                 let rowH = h / 4.0
+                let blockH = rowH * 0.75
 
-                ZStack(alignment: .topLeading) {
-                    // Y-axis stage labels
-                    ForEach(Array(stageLabels.enumerated()), id: \.offset) { i, stage in
-                        Text(stage.rawValue)
-                            .font(.system(size: 8).weight(.medium))
-                            .foregroundStyle(stageColors[stage] ?? .gray)
-                            .frame(width: labelW, alignment: .trailing)
-                            .position(x: labelW / 2, y: rowH * CGFloat(i) + rowH / 2)
-                    }
-
-                    // Horizontal gridlines
-                    ForEach(0..<4, id: \.self) { i in
+                Canvas { context, size in
+                    // Gridlines
+                    for i in 0...4 {
                         let y = rowH * CGFloat(i)
-                        Path { p in
-                            p.move(to: CGPoint(x: labelW, y: y))
-                            p.addLine(to: CGPoint(x: w, y: y))
-                        }
-                        .stroke(Color.gray.opacity(0.1), lineWidth: 0.5)
+                        var path = Path()
+                        path.move(to: CGPoint(x: labelW, y: y))
+                        path.addLine(to: CGPoint(x: w, y: y))
+                        context.stroke(path, with: .color(.gray.opacity(0.08)), lineWidth: 0.5)
                     }
 
-                    // Sleep stage blocks
-                    ForEach(sleep.segments) { segment in
+                    // Draw segments with connectors
+                    for (i, segment) in sleep.segments.enumerated() {
                         let x1 = labelW + chartW * CGFloat((segment.start.timeIntervalSince1970 - bedtime) / timeRange)
                         let x2 = labelW + chartW * CGFloat((segment.end.timeIntervalSince1970 - bedtime) / timeRange)
-                        let segW = max(1, x2 - x1)
-                        let row = CGFloat(segment.stage.depth)
-                        let y = row * rowH
+                        let segW = max(2, x2 - x1)
+                        let depth = CGFloat(segment.stage.depth)
+                        let yCenter = depth * rowH + rowH / 2
+                        let color = stageColors[segment.stage] ?? .blue
                         let isSelected = selectedSegment?.id == segment.id
+                        let opacity: Double = isSelected ? 1.0 : (selectedSegment == nil ? 0.85 : 0.25)
 
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(stageColors[segment.stage] ?? .gray)
-                            .opacity(isSelected ? 1.0 : (selectedSegment == nil ? 1.0 : 0.4))
-                            .frame(width: segW, height: rowH - 2)
-                            .position(x: x1 + segW / 2, y: y + rowH / 2)
-                    }
-
-                    // Step line connecting stages
-                    if sleep.segments.count > 1 {
-                        Path { path in
-                            for (i, segment) in sleep.segments.enumerated() {
-                                let x = labelW + chartW * CGFloat((segment.start.timeIntervalSince1970 - bedtime) / timeRange)
-                                let xEnd = labelW + chartW * CGFloat((segment.end.timeIntervalSince1970 - bedtime) / timeRange)
-                                let y = rowH * CGFloat(segment.stage.depth) + rowH / 2
-
-                                if i == 0 {
-                                    path.move(to: CGPoint(x: x, y: y))
-                                } else {
-                                    path.addLine(to: CGPoint(x: x, y: y))
-                                }
-                                path.addLine(to: CGPoint(x: xEnd, y: y))
-                            }
-                        }
-                        .stroke(Color.white.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
-                    }
-
-                    // Tooltip
-                    if let seg = selectedSegment {
-                        let xMid = labelW + chartW * CGFloat(((seg.start.timeIntervalSince1970 + seg.end.timeIntervalSince1970) / 2 - bedtime) / timeRange)
-
-                        Path { p in
-                            p.move(to: CGPoint(x: xMid, y: 0))
-                            p.addLine(to: CGPoint(x: xMid, y: h))
-                        }
-                        .stroke(Color.white.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-
-                        let dotY = rowH * CGFloat(seg.stage.depth) + rowH / 2
-                        Circle()
-                            .fill(stageColors[seg.stage] ?? .gray)
-                            .frame(width: 7, height: 7)
-                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
-                            .position(x: xMid, y: dotY)
-
-                        let tooltipX = min(max(xMid, 70), w - 70)
-                        let tooltipY: CGFloat = dotY > h / 2 ? dotY - 36 : dotY + 36
-
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 5) {
-                                RoundedRectangle(cornerRadius: 2)
-                                    .fill(stageColors[seg.stage] ?? .gray)
-                                    .frame(width: 8, height: 8)
-                                Text(seg.stage.rawValue)
-                                    .font(.system(size: 10).weight(.semibold))
-                                    .foregroundStyle(.primary)
-                            }
-                            Text("\(Int(seg.durationMinutes)) min")
-                                .font(.system(size: 9).weight(.bold).monospacedDigit())
-                                .foregroundStyle(stageColors[seg.stage] ?? .gray)
-                            HStack(spacing: 2) {
-                                Text(seg.start, format: .dateTime.hour().minute())
-                                Text("-")
-                                Text(seg.end, format: .dateTime.hour().minute())
-                            }
-                            .font(.system(size: 8).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.15), lineWidth: 0.5))
-                        .position(x: tooltipX, y: tooltipY)
+                        // Block
+                        let blockRect = CGRect(x: x1, y: yCenter - blockH / 2, width: segW, height: blockH)
+                        let blockPath = RoundedRectangle(cornerRadius: 3).path(in: blockRect)
+                        context.fill(blockPath, with: .color(color.opacity(opacity)))
                     }
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { drag in
-                            let xPct = max(0, min(1, (drag.location.x - labelW) / chartW))
-                            let touchTime = bedtime + xPct * timeRange
 
-                            let match = sleep.segments.first { seg in
-                                touchTime >= seg.start.timeIntervalSince1970 &&
-                                touchTime <= seg.end.timeIntervalSince1970
-                            }
+                // Y-axis labels (on top of canvas)
+                ForEach(Array(stageLabels.enumerated()), id: \.offset) { i, stage in
+                    Text(stage.rawValue)
+                        .font(.system(size: 8).weight(.semibold))
+                        .foregroundStyle(stageColors[stage]!)
+                        .position(x: labelW / 2, y: rowH * CGFloat(i) + rowH / 2)
+                }
 
-                            if let match {
-                                selectedSegment = match
-                            } else {
-                                selectedSegment = sleep.segments.min(by: {
-                                    let mid0 = ($0.start.timeIntervalSince1970 + $0.end.timeIntervalSince1970) / 2
-                                    let mid1 = ($1.start.timeIntervalSince1970 + $1.end.timeIntervalSince1970) / 2
-                                    return abs(mid0 - touchTime) < abs(mid1 - touchTime)
+                // Tooltip
+                if let seg = selectedSegment {
+                    let xMid = labelW + chartW * CGFloat(((seg.start.timeIntervalSince1970 + seg.end.timeIntervalSince1970) / 2 - bedtime) / timeRange)
+                    let dotY = rowH * CGFloat(seg.stage.depth) + rowH / 2
+                    let tooltipX = min(max(xMid, 65), w - 65)
+                    let tooltipY: CGFloat = dotY > h / 2 ? dotY - 34 : dotY + 34
+
+                    // Scrubber
+                    Path { p in
+                        p.move(to: CGPoint(x: xMid, y: 0))
+                        p.addLine(to: CGPoint(x: xMid, y: h))
+                    }
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+
+                    Circle()
+                        .fill(stageColors[seg.stage]!)
+                        .frame(width: 7, height: 7)
+                        .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                        .position(x: xMid, y: dotY)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            RoundedRectangle(cornerRadius: 2).fill(stageColors[seg.stage]!).frame(width: 8, height: 8)
+                            Text(seg.stage.rawValue).font(.system(size: 10).weight(.semibold)).foregroundStyle(Theme.textPrimary)
+                        }
+                        Text("\(Int(seg.durationMinutes)) min")
+                            .font(.system(size: 9).weight(.bold).monospacedDigit())
+                            .foregroundStyle(stageColors[seg.stage]!)
+                        HStack(spacing: 2) {
+                            Text(seg.start, format: .dateTime.hour().minute())
+                            Text("-")
+                            Text(seg.end, format: .dateTime.hour().minute())
+                        }
+                        .font(.system(size: 8).monospacedDigit())
+                        .foregroundStyle(Theme.textSecondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border, lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+                    .position(x: tooltipX, y: tooltipY)
+                }
+
+                // Gesture overlay
+                Rectangle()
+                    .fill(Color.clear)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                let xPct = max(0, min(1, (drag.location.x - labelW) / chartW))
+                                let touchTime = bedtime + xPct * timeRange
+                                selectedSegment = sleep.segments.first {
+                                    touchTime >= $0.start.timeIntervalSince1970 && touchTime <= $0.end.timeIntervalSince1970
+                                } ?? sleep.segments.min(by: {
+                                    abs(($0.start.timeIntervalSince1970 + $0.end.timeIntervalSince1970) / 2 - touchTime) <
+                                    abs(($1.start.timeIntervalSince1970 + $1.end.timeIntervalSince1970) / 2 - touchTime)
                                 })
                             }
-                        }
-                        .onEnded { _ in
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                withAnimation(.easeOut(duration: 0.2)) { selectedSegment = nil }
+                            .onEnded { _ in
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    withAnimation(.easeOut(duration: 0.2)) { selectedSegment = nil }
+                                }
                             }
-                        }
-                )
+                    )
             }
-            .frame(height: 120)
+            .frame(height: 130)
 
             // Time axis
             HStack {
-                Text(sleep.bedtime, format: .dateTime.hour().minute())
-                    .font(.system(size: 8).monospacedDigit())
-                    .foregroundStyle(Theme.textTertiary)
+                let bedStr = sleep.bedtime
+                let wakeStr = sleep.wakeTime
+                let q1 = Date(timeIntervalSince1970: sleep.bedtime.timeIntervalSince1970 + (sleep.wakeTime.timeIntervalSince1970 - sleep.bedtime.timeIntervalSince1970) * 0.33)
+                let q2 = Date(timeIntervalSince1970: sleep.bedtime.timeIntervalSince1970 + (sleep.wakeTime.timeIntervalSince1970 - sleep.bedtime.timeIntervalSince1970) * 0.66)
+                Text(bedStr, format: .dateTime.hour().minute())
                 Spacer()
-                let midTime = Date(timeIntervalSince1970: (sleep.bedtime.timeIntervalSince1970 + sleep.wakeTime.timeIntervalSince1970) / 2)
-                Text(midTime, format: .dateTime.hour().minute())
-                    .font(.system(size: 8).monospacedDigit())
-                    .foregroundStyle(Theme.textTertiary)
+                Text(q1, format: .dateTime.hour().minute())
                 Spacer()
-                Text(sleep.wakeTime, format: .dateTime.hour().minute())
-                    .font(.system(size: 8).monospacedDigit())
-                    .foregroundStyle(Theme.textTertiary)
+                Text(q2, format: .dateTime.hour().minute())
+                Spacer()
+                Text(wakeStr, format: .dateTime.hour().minute())
             }
-            .padding(.leading, 40)
+            .font(.system(size: 8).monospacedDigit())
+            .foregroundStyle(Theme.textTertiary)
+            .padding(.leading, labelW)
 
             // Legend
             HStack(spacing: 12) {
                 ForEach(stageLabels, id: \.rawValue) { stage in
                     HStack(spacing: 3) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(stageColors[stage] ?? .gray)
-                            .frame(width: 8, height: 4)
-                        Text(stage.rawValue)
-                            .font(.system(size: 9))
-                            .foregroundStyle(Theme.textTertiary)
+                        RoundedRectangle(cornerRadius: 2).fill(stageColors[stage]!).frame(width: 8, height: 4)
+                        Text(stage.rawValue).font(.system(size: 9)).foregroundStyle(Theme.textTertiary)
                     }
                 }
             }

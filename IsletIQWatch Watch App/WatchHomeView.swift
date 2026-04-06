@@ -11,6 +11,9 @@ struct WatchHomeView: View {
                     glucoseCard
                     statsRow
                     sparklineCard
+                    sleepCard
+                    recentReadingsCard
+                    recentMealsCard
                     suppliesCard
                     quickLogCard
                 }
@@ -163,6 +166,123 @@ struct WatchHomeView: View {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
     }
 
+    // MARK: - Sleep Card
+
+    private var sleepCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "moon.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.purple)
+                Text("Sleep")
+                    .font(.caption2.weight(.semibold))
+                Spacer()
+                Text(String(format: "%.1fh", connectivity.sleepHours))
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.purple)
+            }
+
+            if !connectivity.sleepSegments.isEmpty {
+                // Mini sleep stages chart
+                WatchSleepChart(segments: connectivity.sleepSegments)
+                    .frame(height: 40)
+
+                // Stage breakdown
+                VStack(spacing: 3) {
+                    WatchSleepRow(color: Color(red: 0.9, green: 0.35, blue: 0.3), label: "Awake", minutes: connectivity.awakeMin)
+                    WatchSleepRow(color: Color(red: 0.45, green: 0.65, blue: 0.9), label: "REM", minutes: connectivity.remMin)
+                    WatchSleepRow(color: Color(red: 0.2, green: 0.4, blue: 0.85), label: "Core", minutes: connectivity.coreMin)
+                    WatchSleepRow(color: Color(red: 0.35, green: 0.3, blue: 0.75), label: "Deep", minutes: connectivity.deepMin)
+                }
+            } else {
+                Text("No sleep data")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Recent Readings
+
+    private var recentReadingsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "list.bullet")
+                    .font(.caption2)
+                    .foregroundStyle(.teal)
+                Text("Recent")
+                    .font(.caption2.weight(.semibold))
+            }
+
+            if connectivity.sparkline.count > 1 {
+                ForEach(Array(connectivity.sparkline.suffix(5).reversed().enumerated()), id: \.offset) { i, value in
+                    HStack {
+                        let color: Color = value < 70 ? .red : value <= 180 ? .green : value <= 250 ? .orange : .red
+                        Circle()
+                            .fill(color)
+                            .frame(width: 5, height: 5)
+                        Text("\(value)")
+                            .font(.system(size: 11).weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.primary)
+                        Text("mg/dL")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Text("\(i * 5)m ago")
+                            .font(.system(size: 8).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            } else {
+                Text("Waiting for data...")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Recent Meals
+
+    private var recentMealsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "fork.knife")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                Text("Meals")
+                    .font(.caption2.weight(.semibold))
+            }
+
+            if connectivity.recentMeals.isEmpty {
+                Text("No meals today")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(Array(connectivity.recentMeals.prefix(4).enumerated()), id: \.offset) { _, meal in
+                    HStack {
+                        Text(meal.name)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer()
+                        Text("\(meal.carbs)g")
+                            .font(.system(size: 10).weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.teal)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
     private func sendQuickLog(name: String, carbs: Int) {
         guard WCSession.isSupported(),
               WCSession.default.activationState == .activated,
@@ -275,6 +395,97 @@ enum Theme {
     static let elevated = Color.orange
     static let high = Color.red
     static let textTertiary = Color.gray
+}
+
+// MARK: - Watch Sleep Chart (mini, with connecting lines)
+
+struct WatchSleepChart: View {
+    let segments: [(stage: String, start: Double, end: Double, minutes: Double)]
+
+    private let stageColors: [String: Color] = [
+        "Awake": Color(red: 0.9, green: 0.35, blue: 0.3),
+        "REM": Color(red: 0.45, green: 0.65, blue: 0.9),
+        "Core": Color(red: 0.2, green: 0.4, blue: 0.85),
+        "Deep": Color(red: 0.35, green: 0.3, blue: 0.75),
+    ]
+
+    private let stageDepth: [String: Int] = ["Awake": 0, "REM": 1, "Core": 2, "Deep": 3]
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let rowH = h / 4.0
+
+            guard let minTime = segments.map(\.start).min(),
+                  let maxTime = segments.map(\.end).max() else { return AnyView(EmptyView()) }
+            let timeRange = max(1, maxTime - minTime)
+
+            return AnyView(
+                ZStack(alignment: .topLeading) {
+                    // Stage blocks + vertical connectors
+                    ForEach(Array(segments.enumerated()), id: \.offset) { i, seg in
+                        let x1 = w * CGFloat((seg.start - minTime) / timeRange)
+                        let x2 = w * CGFloat((seg.end - minTime) / timeRange)
+                        let segW = max(2, x2 - x1)
+                        let depth = stageDepth[seg.stage] ?? 2
+                        let yCenter = rowH * CGFloat(depth) + rowH / 2
+                        let blockH = rowH * 0.6
+
+                        // Block
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(stageColors[seg.stage] ?? .blue)
+                            .frame(width: segW, height: blockH)
+                            .position(x: x1 + segW / 2, y: yCenter)
+
+                        // Vertical connector
+                        if i < segments.count - 1 {
+                            let next = segments[i + 1]
+                            let nextDepth = stageDepth[next.stage] ?? 2
+                            let nextY = rowH * CGFloat(nextDepth) + rowH / 2
+
+                            if depth != nextDepth {
+                                let topY = min(yCenter, nextY) - blockH / 2
+                                let bottomY = max(yCenter, nextY) + blockH / 2
+                                let connColor = depth > nextDepth ? (stageColors[seg.stage] ?? .blue) : (stageColors[next.stage] ?? .blue)
+
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(connColor.opacity(0.5))
+                                    .frame(width: max(2, segW * 0.3), height: bottomY - topY)
+                                    .position(x: x2, y: topY + (bottomY - topY) / 2)
+                            }
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+struct WatchSleepRow: View {
+    let color: Color
+    let label: String
+    let minutes: Double
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text(label)
+                .font(.system(size: 9))
+                .foregroundStyle(.primary)
+            Spacer()
+            Text(formatMin(minutes))
+                .font(.system(size: 9).weight(.medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func formatMin(_ m: Double) -> String {
+        let hrs = Int(m) / 60
+        let mins = Int(m) % 60
+        if hrs > 0 { return "\(hrs)h \(mins)m" }
+        return "\(mins)m"
+    }
 }
 
 #Preview {

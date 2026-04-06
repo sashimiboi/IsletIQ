@@ -20,6 +20,18 @@ class WatchConnectivityManager: NSObject {
     var avg: Int = 0
     var readingCount: Int = 0
 
+    // Sleep
+    var sleepHours: Double = 0
+    var sleepQuality: String = "--"
+    var deepMin: Double = 0
+    var remMin: Double = 0
+    var coreMin: Double = 0
+    var awakeMin: Double = 0
+    var sleepSegments: [(stage: String, start: Double, end: Double, minutes: Double)] = []
+
+    // Recent meals
+    var recentMeals: [(name: String, carbs: Int, calories: Int)] = []
+
     private let apiBase = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
 
     private override init() {
@@ -41,6 +53,11 @@ class WatchConnectivityManager: NSObject {
     }
 
     private func startPeriodicRefresh() {
+        // Poll every 60 seconds for near-realtime data
+        Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { await self?.fetchCGM() }
+        }
+        // Full refresh every 5 minutes
         Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { await self?.fetchAll() }
         }
@@ -50,8 +67,59 @@ class WatchConnectivityManager: NSObject {
 
     func fetchAll() async {
         await fetchCGM()
+        await fetchSleep()
+        await fetchMeals()
         await fetchSupplies()
         await fetchMetrics()
+    }
+
+    private func fetchMeals() async {
+        guard let url = URL(string: "\(apiBase)/api/meals/latest") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let meals = json["meals"] as? [[String: Any]] {
+                await MainActor.run {
+                    recentMeals = meals.map { m in
+                        (name: m["name"] as? String ?? "Meal",
+                         carbs: m["carbs"] as? Int ?? 0,
+                         calories: m["calories"] as? Int ?? 0)
+                    }
+                    print("[watch] Meals loaded: \(recentMeals.count)")
+                }
+            }
+        } catch {
+            print("[watch] Meals fetch: \(error.localizedDescription)")
+        }
+    }
+
+    private func fetchSleep() async {
+        guard let url = URL(string: "\(apiBase)/api/sleep/latest") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               json["error"] == nil {
+                await MainActor.run {
+                    sleepHours = json["totalHours"] as? Double ?? 0
+                    sleepQuality = json["quality"] as? String ?? "--"
+                    deepMin = json["deepMinutes"] as? Double ?? 0
+                    remMin = json["remMinutes"] as? Double ?? 0
+                    coreMin = json["coreMinutes"] as? Double ?? 0
+                    awakeMin = json["awakeMinutes"] as? Double ?? 0
+                    if let segs = json["segments"] as? [[String: Any]] {
+                        sleepSegments = segs.map { s in
+                            (stage: s["stage"] as? String ?? "Core",
+                             start: s["start"] as? Double ?? 0,
+                             end: s["end"] as? Double ?? 0,
+                             minutes: s["minutes"] as? Double ?? 0)
+                        }
+                    }
+                    print("[watch] Sleep loaded: \(String(format: "%.1f", sleepHours))h")
+                }
+            }
+        } catch {
+            print("[watch] Sleep fetch: \(error.localizedDescription)")
+        }
     }
 
     private func fetchCGM() async {

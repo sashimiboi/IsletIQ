@@ -228,12 +228,10 @@
 				C78B522E2F801463002C3120 /* Sources */,
 				C78B522F2F801463002C3120 /* Frameworks */,
 				C78B52302F801463002C3120 /* Resources */,
-				AABB00132F822B000096334D /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				AABB00112F822B000096334D /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				C78B52342F801463002C3120 /* IsletIQ */,

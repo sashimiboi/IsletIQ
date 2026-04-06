@@ -292,7 +292,40 @@ final class HealthKitManager {
                     return
                 }
 
-                // Group by sleep session — find the most recent night
+                // Group samples into sleep sessions based on time gaps
+                // A gap of > 60 min between samples means a new session
+                let sorted = samples.sorted { $0.startDate < $1.startDate }
+                var sessions: [[HKCategorySample]] = []
+                var currentSession: [HKCategorySample] = []
+
+                for sample in sorted {
+                    // Skip "inBed" samples, only use actual sleep stages
+                    guard sample.value != HKCategoryValueSleepAnalysis.inBed.rawValue else { continue }
+
+                    if let last = currentSession.last {
+                        let gap = sample.startDate.timeIntervalSince(last.endDate)
+                        if gap > 3600 { // > 1 hour gap = new session
+                            if !currentSession.isEmpty { sessions.append(currentSession) }
+                            currentSession = [sample]
+                        } else {
+                            currentSession.append(sample)
+                        }
+                    } else {
+                        currentSession.append(sample)
+                    }
+                }
+                if !currentSession.isEmpty { sessions.append(currentSession) }
+
+                // Find the most recent session that's at least 2 hours (ignore short naps)
+                guard let nightSession = sessions.last(where: { session in
+                    let totalMin = session.reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) / 60.0 }
+                    return totalMin >= 120
+                }) ?? sessions.last else {
+                    continuation.resume()
+                    return
+                }
+
+                // Process only the selected session
                 var totalSleep = 0.0
                 var deep = 0.0
                 var rem = 0.0
@@ -302,7 +335,7 @@ final class HealthKitManager {
                 var latest = Date.distantPast
                 var segments: [SleepSegment] = []
 
-                for sample in samples {
+                for sample in nightSession {
                     let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
                     if sample.startDate < earliest { earliest = sample.startDate }
                     if sample.endDate > latest { latest = sample.endDate }

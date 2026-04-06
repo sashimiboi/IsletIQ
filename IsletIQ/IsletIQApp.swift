@@ -31,22 +31,6 @@ struct IsletIQApp: App {
             GlucoseReading.self,
         ])
 
-        // Nuke any old database first to avoid schema mismatch crashes
-        let defaultURL = URL.applicationSupportDirectory.appending(path: "default.store")
-        for ext in ["", "-shm", "-wal"] {
-            let fileURL = defaultURL.deletingPathExtension().appendingPathExtension("store\(ext)")
-            try? FileManager.default.removeItem(at: fileURL)
-        }
-        // Also try the standard SwiftData location
-        if let containerURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            let enumerator = FileManager.default.enumerator(at: containerURL, includingPropertiesForKeys: nil)
-            while let fileURL = enumerator?.nextObject() as? URL {
-                if fileURL.pathExtension == "store" || fileURL.lastPathComponent.contains("default.store") {
-                    try? FileManager.default.removeItem(at: fileURL)
-                }
-            }
-        }
-
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
