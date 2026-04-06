@@ -29,8 +29,16 @@ class WatchConnectivityManager: NSObject {
     var awakeMin: Double = 0
     var sleepSegments: [(stage: String, start: Double, end: Double, minutes: Double)] = []
 
-    // Recent meals
+    // Meals
     var recentMeals: [(name: String, carbs: Int, calories: Int)] = []
+
+    // Pump
+    var basalRate: Double = 0
+    var lastBolus: Double = 0
+    var reservoir: Double = 0
+    var pumpBattery: Int = 0
+    var pumpModel: String = "--"
+    var recentBoluses: [(units: Double, carbs: Int, timestamp: Double)] = []
 
     private let apiBase = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
 
@@ -69,8 +77,35 @@ class WatchConnectivityManager: NSObject {
         await fetchCGM()
         await fetchSleep()
         await fetchMeals()
+        await fetchPump()
         await fetchSupplies()
         await fetchMetrics()
+    }
+
+    private func fetchPump() async {
+        guard let url = URL(string: "\(apiBase)/api/pump/latest") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any], json["error"] == nil {
+                await MainActor.run {
+                    basalRate = json["basalRate"] as? Double ?? 0
+                    lastBolus = json["lastBolus"] as? Double ?? 0
+                    reservoir = json["reservoir"] as? Double ?? 0
+                    pumpBattery = json["battery"] as? Int ?? 0
+                    pumpModel = json["model"] as? String ?? "--"
+                    if let boluses = json["recentBoluses"] as? [[String: Any]] {
+                        recentBoluses = boluses.map { b in
+                            (units: b["units"] as? Double ?? 0,
+                             carbs: b["carbs"] as? Int ?? 0,
+                             timestamp: b["timestamp"] as? Double ?? 0)
+                        }
+                    }
+                    print("[watch] Pump loaded: \(pumpModel), reservoir \(Int(reservoir))u")
+                }
+            }
+        } catch {
+            print("[watch] Pump fetch: \(error.localizedDescription)")
+        }
     }
 
     private func fetchMeals() async {

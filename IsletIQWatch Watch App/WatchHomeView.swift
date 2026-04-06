@@ -11,6 +11,7 @@ struct WatchHomeView: View {
                     glucoseCard
                     statsRow
                     sparklineCard
+                    pumpCard
                     sleepCard
                     recentReadingsCard
                     recentMealsCard
@@ -158,6 +159,92 @@ struct WatchHomeView: View {
                 }
                 QuickLogButton(name: "50g", icon: "fork.knife") {
                     sendQuickLog(name: "Meal", carbs: 50)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Pump Card
+
+    private var pumpCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "drop.circle")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.primary)
+                Text(connectivity.pumpModel)
+                    .font(.caption2.weight(.semibold))
+                Spacer()
+                HStack(spacing: 2) {
+                    Image(systemName: "battery.75")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.green)
+                    Text("\(connectivity.pumpBattery)%")
+                        .font(.system(size: 9).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 0) {
+                VStack(spacing: 2) {
+                    Text(String(format: "%.1f", connectivity.basalRate))
+                        .font(.system(size: 12).weight(.bold).monospacedDigit())
+                        .foregroundStyle(Theme.primary)
+                    Text("u/hr")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                Divider().frame(height: 20)
+
+                VStack(spacing: 2) {
+                    Text(String(format: "%.1f", connectivity.lastBolus))
+                        .font(.system(size: 12).weight(.bold).monospacedDigit())
+                        .foregroundStyle(Theme.teal)
+                    Text("last bolus")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+
+                Divider().frame(height: 20)
+
+                VStack(spacing: 2) {
+                    Text("\(Int(connectivity.reservoir))")
+                        .font(.system(size: 12).weight(.bold).monospacedDigit())
+                        .foregroundStyle(.primary)
+                    Text("units")
+                        .font(.system(size: 7))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+
+            // Recent boluses
+            if !connectivity.recentBoluses.isEmpty {
+                Divider()
+                ForEach(Array(connectivity.recentBoluses.prefix(3).enumerated()), id: \.offset) { _, bolus in
+                    HStack {
+                        Image(systemName: "syringe.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(Theme.primary)
+                        Text(String(format: "%.1fu", bolus.units))
+                            .font(.system(size: 10).weight(.semibold).monospacedDigit())
+                            .foregroundStyle(.primary)
+                        if bolus.carbs > 0 {
+                            Text("\(bolus.carbs)g")
+                                .font(.system(size: 9))
+                                .foregroundStyle(Theme.teal)
+                        }
+                        Spacer()
+                        Text(Date(timeIntervalSince1970: bolus.timestamp), format: .dateTime.hour().minute())
+                            .font(.system(size: 8).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
         }
@@ -423,38 +510,18 @@ struct WatchSleepChart: View {
 
             return AnyView(
                 ZStack(alignment: .topLeading) {
-                    // Stage blocks + vertical connectors
-                    ForEach(Array(segments.enumerated()), id: \.offset) { i, seg in
+                    // Stage blocks only
+                    ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                         let x1 = w * CGFloat((seg.start - minTime) / timeRange)
                         let x2 = w * CGFloat((seg.end - minTime) / timeRange)
                         let segW = max(2, x2 - x1)
                         let depth = stageDepth[seg.stage] ?? 2
                         let yCenter = rowH * CGFloat(depth) + rowH / 2
-                        let blockH = rowH * 0.6
 
-                        // Block
                         RoundedRectangle(cornerRadius: 2)
                             .fill(stageColors[seg.stage] ?? .blue)
-                            .frame(width: segW, height: blockH)
+                            .frame(width: segW, height: rowH * 0.65)
                             .position(x: x1 + segW / 2, y: yCenter)
-
-                        // Vertical connector
-                        if i < segments.count - 1 {
-                            let next = segments[i + 1]
-                            let nextDepth = stageDepth[next.stage] ?? 2
-                            let nextY = rowH * CGFloat(nextDepth) + rowH / 2
-
-                            if depth != nextDepth {
-                                let topY = min(yCenter, nextY) - blockH / 2
-                                let bottomY = max(yCenter, nextY) + blockH / 2
-                                let connColor = depth > nextDepth ? (stageColors[seg.stage] ?? .blue) : (stageColors[next.stage] ?? .blue)
-
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(connColor.opacity(0.5))
-                                    .frame(width: max(2, segW * 0.3), height: bottomY - topY)
-                                    .position(x: x2, y: topY + (bottomY - topY) / 2)
-                            }
-                        }
                     }
                 }
             )

@@ -26,6 +26,8 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 struct IsletIQApp: App {
     // Background task identifier
     static let bgTaskID = "com.isletiq.refresh"
+    @State private var containerError: String?
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             GlucoseReading.self,
@@ -36,12 +38,15 @@ struct IsletIQApp: App {
         do {
             return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            // Last resort — try in-memory
+            print("[IsletIQ] Persistent store failed: \(error). Falling back to in-memory storage.")
+            // Last resort -- in-memory so the app still launches
             let memConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             do {
                 return try ModelContainer(for: schema, configurations: [memConfig])
             } catch {
-                fatalError("Could not create ModelContainer: \(error)")
+                // Absolute last resort -- create a bare container
+                print("[IsletIQ] In-memory store also failed: \(error). Creating bare container.")
+                return try! ModelContainer(for: Schema([]))
             }
         }
     }()

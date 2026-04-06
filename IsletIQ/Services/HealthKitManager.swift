@@ -112,6 +112,12 @@ final class HealthKitManager {
     // MARK: - Log Meal
 
     func logMeal(name: String, calories: Double, carbs: Double, protein: Double, fat: Double) async {
+        // Bounds checking: no negative values, max 10000 kcal / 2000g macros
+        let calories = min(max(calories, 0), 10000)
+        let carbs = min(max(carbs, 0), 2000)
+        let protein = min(max(protein, 0), 2000)
+        let fat = min(max(fat, 0), 2000)
+
         let date = Date()
         let metadata: [String: Any] = [HKMetadataKeyFoodType: name]
 

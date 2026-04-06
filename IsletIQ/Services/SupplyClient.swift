@@ -23,8 +23,10 @@ actor SupplyClient {
 
     func fetchSupplies() async -> [SupplyResponse] {
         guard let url = URL(string: "\(baseURL)/api/supplies") else { return [] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             struct Wrapper: Codable { let supplies: [SupplyResponse] }
             let wrapper = try JSONDecoder().decode(Wrapper.self, from: data)
             return wrapper.supplies
@@ -39,6 +41,7 @@ actor SupplyClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
         let body: [String: Any] = [
             "name": name, "category": category, "quantity": quantity,
             "usage_rate_days": usageRateDays, "notes": notes
@@ -54,6 +57,7 @@ actor SupplyClient {
         guard let url = URL(string: "\(baseURL)/api/supplies/\(id)/use?count=\(count)") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        APIConfig.applyAuth(to: &request)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
@@ -65,6 +69,7 @@ actor SupplyClient {
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
         let body: [String: Any] = ["quantity": max(0, quantity)]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
@@ -77,6 +82,7 @@ actor SupplyClient {
         guard let url = URL(string: "\(baseURL)/api/supplies/\(id)") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        APIConfig.applyAuth(to: &request)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200

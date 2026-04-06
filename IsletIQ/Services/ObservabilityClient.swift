@@ -18,8 +18,10 @@ actor ObservabilityClient {
     func fetchMetrics(sessionId: String? = nil) async -> [String: Any] {
         let qs = sessionId.map { "?session_id=\($0)" } ?? ""
         guard let url = URL(string: "\(baseURL)/api/metrics\(qs)") else { return [:] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 return json
             }
@@ -30,8 +32,10 @@ actor ObservabilityClient {
     func fetchEvalsSummary(sessionId: String? = nil) async -> [String: Any] {
         let qs = sessionId.map { "?session_id=\($0)" } ?? ""
         guard let url = URL(string: "\(baseURL)/api/evals/summary\(qs)") else { return [:] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 return json
             }
@@ -41,8 +45,10 @@ actor ObservabilityClient {
 
     func fetchObservability() async -> [String: Any] {
         guard let url = URL(string: "\(baseURL)/api/observability") else { return [:] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 return json
             }
@@ -52,16 +58,20 @@ actor ObservabilityClient {
 
     func healthCheck() async -> Bool {
         guard let url = URL(string: "\(baseURL)/health") else { return false }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (_, response) = try await URLSession.shared.data(from: url)
+            let (_, response) = try await URLSession.shared.data(for: request)
             return (response as? HTTPURLResponse)?.statusCode == 200
         } catch { return false }
     }
 
     private func fetchJSON(_ path: String, key: String) async -> [[String: Any]] {
         guard let url = URL(string: "\(baseURL)\(path)") else { return [] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let items = json[key] as? [[String: Any]] {
                 return items

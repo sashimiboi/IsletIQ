@@ -17,9 +17,15 @@ struct ContentView: View {
     @State private var dexcomManager = DexcomManager()
     @State private var healthKit = HealthKitManager()
     @State private var notifications = NotificationManager()
+    @State private var isAuthenticated = APIConfig.authToken != nil
     private let watchSync = WatchSyncManager.shared
 
     var body: some View {
+        if !isAuthenticated {
+            AuthView {
+                isAuthenticated = true
+            }
+        } else {
         #if os(macOS)
         NavigationSplitView {
             sidebarContent
@@ -90,8 +96,9 @@ struct ContentView: View {
         .tint(Theme.primary)
         .onAppear {
             // Seed in background so it doesn't block UI
-            Task.detached(priority: .background) {
-                await MainActor.run { seedIfNeeded() }
+            // Seed only if DB is empty - runs in background
+            Task(priority: .background) {
+                seedIfNeeded()
             }
             Task {
                 try? await Task.sleep(for: .seconds(2))
@@ -111,6 +118,7 @@ struct ContentView: View {
                 try? await Task.sleep(for: .seconds(4))
                 await pushSleepToBackend()
                 await pushMealsToBackend()
+                await pushPumpToBackend()
             }
             // Notifications
             Task {
@@ -122,8 +130,9 @@ struct ContentView: View {
         .onChange(of: dexcomManager.liveReadings.count) {
             if let latest = dexcomManager.liveReadings.first {
                 notifications.checkGlucose(value: latest.safeValue, trend: latest.trendArrow)
-                notifications.checkSensor(daysRemaining: MockData.sensorDaysRemaining)
-                notifications.checkPump(reservoirUnits: MockData.reservoirUnits, podDaysRemaining: 2)
+                // TODO: Wire up real sensor/pump data when pump integration is available
+                // notifications.checkSensor(daysRemaining: sensorDaysRemaining)
+                // notifications.checkPump(reservoirUnits: reservoirUnits, podDaysRemaining: podDaysRemaining)
 
                 // Sync to Apple Watch via Bluetooth
                 let spark = Array(dexcomManager.liveReadings.prefix(6).reversed().map(\.safeValue))
@@ -157,6 +166,7 @@ struct ContentView: View {
             LogInsulinView(healthKit: healthKit)
         }
         #endif
+        } // end isAuthenticated
     }
 
     private func syncToWatch() {
@@ -197,6 +207,7 @@ struct ContentView: View {
             await pushCGMToBackend(value: latest.value, trend: latest.trend, status: status, statusColor: color, sparkline: spark, tir: tir, avg: avg, readingCount: allVals.count)
             await pushSleepToBackend()
             await pushMealsToBackend()
+            await pushPumpToBackend()
         }
     }
 
@@ -206,6 +217,7 @@ struct ContentView: View {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
 
         let segments = sleep.segments.map { seg -> [String: Any] in
             ["stage": seg.stage.rawValue,
@@ -229,12 +241,18 @@ struct ContentView: View {
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    private func pushPumpToBackend() async {
+        // TODO: Replace with real pump integration (e.g., Loop, Omnipod SDK)
+        // Skipping push — no real pump data source connected yet.
+    }
+
     private func pushMealsToBackend() async {
         let meals = healthKit.recentMeals.filter { Calendar.current.isDateInToday($0.date) }
         guard let url = URL(string: "\(APIConfig.baseURL)/api/meals/push") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
         let mealsData = meals.map { m -> [String: Any] in
             ["name": m.name, "carbs": Int(m.carbs), "calories": Int(m.calories)]
         }
@@ -247,6 +265,7 @@ struct ContentView: View {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
         let body: [String: Any] = [
             "glucose": value,
             "trend": trend.rawValue,
@@ -334,7 +353,10 @@ struct ContentView: View {
         let count = (try? modelContext.fetchCount(descriptor)) ?? 0
         guard count == 0 else { return }
 
-        for reading in MockData.glucoseReadings() {
+        // Only seed last 7 days to keep it fast (not all 19K readings)
+        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: .now)!
+        let readings = MockData.glucoseReadings().filter { $0.timestamp >= cutoff }
+        for reading in readings {
             modelContext.insert(reading)
         }
     }

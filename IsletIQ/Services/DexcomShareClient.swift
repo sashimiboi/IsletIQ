@@ -70,7 +70,9 @@ actor DexcomShareClient {
     }
 
     private func authenticateAccount(username: String, password: String) async throws -> String {
-        let url = URL(string: "\(baseURL)/General/AuthenticatePublisherAccount")!
+        guard let url = URL(string: "\(baseURL)/General/AuthenticatePublisherAccount") else {
+            throw DexcomError.networkError("Invalid authenticate URL")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -106,7 +108,9 @@ actor DexcomShareClient {
     }
 
     private func loginById(accountId: String, password: String) async throws -> String {
-        let url = URL(string: "\(baseURL)/General/LoginPublisherAccountById")!
+        guard let url = URL(string: "\(baseURL)/General/LoginPublisherAccountById") else {
+            throw DexcomError.networkError("Invalid login URL")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -144,7 +148,9 @@ actor DexcomShareClient {
     // MARK: - Fetch Readings
 
     func fetchLatestReadings(sessionId: String, minutes: Int = 1440, maxCount: Int = 288) async throws -> [ShareGlucoseReading] {
-        let url = URL(string: "\(baseURL)/Publisher/ReadPublisherLatestGlucoseValues?sessionId=\(sessionId)&minutes=\(minutes)&maxCount=\(maxCount)")!
+        guard let url = URL(string: "\(baseURL)/Publisher/ReadPublisherLatestGlucoseValues?sessionId=\(sessionId)&minutes=\(minutes)&maxCount=\(maxCount)") else {
+            throw DexcomError.networkError("Invalid readings URL")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

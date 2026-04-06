@@ -11,13 +11,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		AABB00122F822B000096334D /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = C78B522A2F801462002C3120 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = C7ABD4792F822A030096334D;
-			remoteInfo = IsletIQWatch;
-		};
 		C78B52442F801464002C3120 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C78B522A2F801462002C3120 /* Project object */;
@@ -56,16 +49,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		AABB00132F822B000096334D /* Embed Watch Content */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
-			dstSubfolderSpec = 16;
-			files = (
-			);
-			name = "Embed Watch Content";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		C7ABD4A32F822A040096334D /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -536,11 +519,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		AABB00112F822B000096334D /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = C7ABD4792F822A030096334D /* IsletIQWatch */;
-			targetProxy = AABB00122F822B000096334D /* PBXContainerItemProxy */;
-		};
 		C78B52452F801464002C3120 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = C78B52312F801463002C3120 /* IsletIQ */;
@@ -889,7 +867,7 @@
 				DEVELOPMENT_TEAM = LK6LDN8U8J;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-					INFOPLIST_FILE = "IsletIQWatch Watch App/WatchInfo.plist";
+				INFOPLIST_FILE = "IsletIQWatch Watch App/WatchInfo.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -920,7 +898,7 @@
 				DEVELOPMENT_TEAM = LK6LDN8U8J;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
-					INFOPLIST_FILE = "IsletIQWatch Watch App/WatchInfo.plist";
+				INFOPLIST_FILE = "IsletIQWatch Watch App/WatchInfo.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

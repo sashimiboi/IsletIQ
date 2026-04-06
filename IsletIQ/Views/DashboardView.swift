@@ -35,8 +35,12 @@ enum ChartRange: String, CaseIterable {
 }
 
 struct DashboardView: View {
-    @Query(sort: \GlucoseReading.timestamp, order: .reverse) private var storedReadings: [GlucoseReading]
+    @Query(sort: \GlucoseReading.timestamp, order: .reverse) var storedReadings: [GlucoseReading]
     var dexcomManager: DexcomManager?
+
+    init(dexcomManager: DexcomManager? = nil) {
+        self.dexcomManager = dexcomManager
+    }
     @State private var chartRange: ChartRange = .day
     @State private var chartMode: ChartMode = .trend
     @State private var agpRange: ChartRange = .week
@@ -54,28 +58,24 @@ struct DashboardView: View {
 
     // Unified data source — live Dexcom if available, else stored
     private var allReadings: [ReadingPoint] {
-        // Start with stored/CSV data
-        var readings = storedReadings.map {
-            ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow)
-        }
-
-        // Merge live Dexcom data (deduplicate by timestamp within 2 min)
+        // Prefer live Dexcom data when available (already sorted, fast)
         if let mgr = dexcomManager, !mgr.liveReadings.isEmpty {
             let livePoints = mgr.liveReadings.compactMap { r -> ReadingPoint? in
                 guard let ts = r.timestamp else { return nil }
                 return ReadingPoint(value: r.safeValue, timestamp: ts, trend: r.trendArrow)
             }
-
-            let existingTimestamps = Set(readings.map { Int($0.timestamp.timeIntervalSince1970 / 120) })
-            for pt in livePoints {
-                let bucket = Int(pt.timestamp.timeIntervalSince1970 / 120)
-                if !existingTimestamps.contains(bucket) {
-                    readings.append(pt)
-                }
-            }
+            // For ranges beyond live data, supplement with stored
+            let liveMinTime = livePoints.last?.timestamp ?? Date()
+            let stored = storedReadings
+                .filter { $0.timestamp < liveMinTime }
+                .prefix(2000) // cap for performance
+                .map { ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow) }
+            return livePoints + stored
         }
-
-        return readings.sorted { $0.timestamp > $1.timestamp }
+        // Fallback to stored only
+        return storedReadings.prefix(2000).map {
+            ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow)
+        }
     }
 
     private var latest: ReadingPoint? { allReadings.first }

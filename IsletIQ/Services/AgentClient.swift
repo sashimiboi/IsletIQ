@@ -115,10 +115,13 @@ actor AgentClient {
     // MARK: - Send Message with Context
 
     func sendMessage(message: String, agent: String, sessionId: String? = nil, context: String? = nil, imageBase64: String? = nil) async throws -> ChatResponse {
-        let url = URL(string: "\(baseURL)/chat")!
+        guard let url = URL(string: "\(baseURL)/chat") else {
+            throw AgentError.serverError("Invalid URL: \(baseURL)/chat")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
         request.timeoutInterval = 120
 
         // Inject context into the message so the agent sees it
@@ -156,11 +159,14 @@ actor AgentClient {
     // MARK: - Stream Message (SSE)
 
     func streamMessage(message: String, agent: String, sessionId: String? = nil, context: String? = nil, imageBase64: String? = nil, onEvent: @escaping (StreamEvent) -> Void) async throws {
-        let url = URL(string: "\(baseURL)/chat/stream")!
+        guard let url = URL(string: "\(baseURL)/chat/stream") else {
+            throw AgentError.serverError("Invalid URL: \(baseURL)/chat/stream")
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        APIConfig.applyAuth(to: &request)
         request.timeoutInterval = 120
 
         var fullMessage = message
