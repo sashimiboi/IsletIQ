@@ -1,21 +1,5 @@
 import SwiftUI
 
-enum AGPRange: String, CaseIterable {
-    case week = "7d"
-    case twoWeeks = "14d"
-    case month = "30d"
-    case quarter = "90d"
-
-    var days: Int {
-        switch self {
-        case .week: 7
-        case .twoWeeks: 14
-        case .month: 30
-        case .quarter: 90
-        }
-    }
-}
-
 struct AGPBand {
     let hour: Double
     let min: Double
@@ -30,14 +14,14 @@ struct AGPBand {
 /// Ambulatory Glucose Profile - Glooko-style clinical design
 struct AGPChartView: View {
     let readings: [ReadingPoint]
-    var agpRange: AGPRange = .week
+    var agpRange: ChartRange = .week
 
     @State private var selectedSlot: Int? = nil
     @State private var zoomScale: CGFloat = 1.0
     @State private var lastZoomScale: CGFloat = 1.0
 
     private var filteredReadings: [ReadingPoint] {
-        let cutoff = Calendar.current.date(byAdding: .day, value: -agpRange.days, to: Date()) ?? Date()
+        let cutoff = Date().addingTimeInterval(-agpRange.seconds)
         return readings.filter { $0.timestamp >= cutoff }
     }
 

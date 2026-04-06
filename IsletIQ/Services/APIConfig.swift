@@ -1,13 +1,16 @@
 import Foundation
 
 enum APIConfig {
+    // AWS ECS Fargate + ALB (stable URL)
+    static let cloudURL = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+    // Local dev fallback
     static let macIP = "192.168.1.87"
 
     @MainActor static var baseURL: String {
         #if targetEnvironment(simulator)
         return "http://localhost:8000"
         #else
-        return "http://\(macIP):8000"
+        return cloudURL
         #endif
     }
 
@@ -16,7 +19,7 @@ enum APIConfig {
         #if targetEnvironment(simulator)
         "http://localhost:8000"
         #else
-        "http://\(macIP):8000"
+        cloudURL
         #endif
     }
 }

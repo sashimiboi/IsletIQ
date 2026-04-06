@@ -1,6 +1,30 @@
 import Foundation
 import HealthKit
 
+enum SleepStage: String {
+    case deep = "Deep"
+    case rem = "REM"
+    case core = "Core"
+    case awake = "Awake"
+
+    var depth: Int { // lower = deeper sleep (for y-axis)
+        switch self {
+        case .awake: 0
+        case .rem: 1
+        case .core: 2
+        case .deep: 3
+        }
+    }
+}
+
+struct SleepSegment: Identifiable {
+    let id = UUID()
+    let stage: SleepStage
+    let start: Date
+    let end: Date
+    var durationMinutes: Double { end.timeIntervalSince(start) / 60.0 }
+}
+
 struct SleepData {
     let bedtime: Date
     let wakeTime: Date
@@ -9,6 +33,7 @@ struct SleepData {
     let remMinutes: Double
     let coreMinutes: Double
     let awakeMinutes: Double
+    var segments: [SleepSegment] = []
 
     var totalHours: Double { totalMinutes / 60.0 }
     var quality: String {
@@ -34,6 +59,8 @@ final class HealthKitManager {
     }
     var lastSleep: SleepData?
     var stepsToday: Int = 0
+    var hourlySteps: [(hour: Int, steps: Int)] = []
+    var weeklySteps: [(date: Date, steps: Int)] = []
     var activeCaloriesToday: Double = 0
 
     // Types we need
@@ -271,6 +298,7 @@ final class HealthKitManager {
                 var awake = 0.0
                 var earliest = Date.distantFuture
                 var latest = Date.distantPast
+                var segments: [SleepSegment] = []
 
                 for sample in samples {
                     let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
@@ -280,14 +308,19 @@ final class HealthKitManager {
                     switch sample.value {
                     case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
                         deep += duration; totalSleep += duration
+                        segments.append(SleepSegment(stage: .deep, start: sample.startDate, end: sample.endDate))
                     case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
                         rem += duration; totalSleep += duration
+                        segments.append(SleepSegment(stage: .rem, start: sample.startDate, end: sample.endDate))
                     case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
                         core += duration; totalSleep += duration
+                        segments.append(SleepSegment(stage: .core, start: sample.startDate, end: sample.endDate))
                     case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
                         core += duration; totalSleep += duration
+                        segments.append(SleepSegment(stage: .core, start: sample.startDate, end: sample.endDate))
                     case HKCategoryValueSleepAnalysis.awake.rawValue:
                         awake += duration
+                        segments.append(SleepSegment(stage: .awake, start: sample.startDate, end: sample.endDate))
                     default:
                         break
                     }
@@ -301,7 +334,8 @@ final class HealthKitManager {
                         deepMinutes: deep,
                         remMinutes: rem,
                         coreMinutes: core,
-                        awakeMinutes: awake
+                        awakeMinutes: awake,
+                        segments: segments.sorted { $0.start < $1.start }
                     )
                     Task { @MainActor in
                         self.lastSleep = sleep
@@ -347,6 +381,67 @@ final class HealthKitManager {
                 }
                 store.execute(query)
             }
+        }
+    }
+
+    // MARK: - Fetch Hourly Steps (for detail chart)
+
+    func fetchHourlySteps() async {
+        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
+        let cal = Calendar.current
+        let startOfDay = cal.startOfDay(for: .now)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: stepType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: startOfDay, end: .now),
+                options: .cumulativeSum,
+                anchorDate: startOfDay,
+                intervalComponents: DateComponents(hour: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var hourly: [(hour: Int, steps: Int)] = []
+                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
+                    let hour = cal.component(.hour, from: stats.startDate)
+                    let steps = Int(stats.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+                    hourly.append((hour: hour, steps: steps))
+                }
+                Task { @MainActor in
+                    self.hourlySteps = hourly
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Fetch Weekly Steps (for 7-day chart)
+
+    func fetchWeeklySteps() async {
+        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
+        let cal = Calendar.current
+        let sevenDaysAgo = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: .now))!
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: stepType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: sevenDaysAgo, end: .now),
+                options: .cumulativeSum,
+                anchorDate: sevenDaysAgo,
+                intervalComponents: DateComponents(day: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var daily: [(date: Date, steps: Int)] = []
+                results?.enumerateStatistics(from: sevenDaysAgo, to: .now) { stats, _ in
+                    let steps = Int(stats.sumQuantity()?.doubleValue(for: .count()) ?? 0)
+                    daily.append((date: stats.startDate, steps: steps))
+                }
+                Task { @MainActor in
+                    self.weeklySteps = daily
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
         }
     }
 

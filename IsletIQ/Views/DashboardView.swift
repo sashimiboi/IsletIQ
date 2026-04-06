@@ -21,6 +21,8 @@ enum ChartRange: String, CaseIterable {
     case day = "24h"
     case threeDays = "3d"
     case week = "7d"
+    case twoWeeks = "14d"
+    case month = "30d"
 
     var seconds: TimeInterval {
         switch self {
@@ -28,6 +30,8 @@ enum ChartRange: String, CaseIterable {
         case .day: 86400
         case .threeDays: 3 * 86400
         case .week: 7 * 86400
+        case .twoWeeks: 14 * 86400
+        case .month: 30 * 86400
         }
     }
 }
@@ -37,7 +41,7 @@ struct DashboardView: View {
     var dexcomManager: DexcomManager?
     @State private var chartRange: ChartRange = .day
     @State private var chartMode: ChartMode = .trend
-    @State private var agpRange: AGPRange = .week
+    @State private var agpRange: ChartRange = .week
     @State private var recentMode: RecentMode = .cgm
 
     enum RecentMode: String, CaseIterable {
@@ -310,7 +314,7 @@ struct DashboardView: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    ForEach(AGPRange.allCases, id: \.self) { range in
+                    ForEach(ChartRange.allCases, id: \.self) { range in
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) { agpRange = range }
                         } label: {

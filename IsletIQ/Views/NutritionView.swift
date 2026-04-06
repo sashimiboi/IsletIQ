@@ -3,6 +3,7 @@ import SwiftUI
 struct NutritionView: View {
     var healthKit: HealthKitManager?
     @State private var showLogMeal = false
+    @State private var showStepsDetail = false
     @State private var isLoading = false
 
     var body: some View {
@@ -86,41 +87,45 @@ struct NutritionView: View {
                     SleepStat(value: String(format: "%.0f", sleep.remMinutes), unit: "min", label: "REM", color: Theme.primary)
                 }
 
-                // Sleep stages bar
-                let total = max(1, sleep.totalMinutes + sleep.awakeMinutes)
-                GeometryReader { geo in
-                    HStack(spacing: 1) {
-                        if sleep.deepMinutes > 0 {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Theme.primary)
-                                .frame(width: geo.size.width * sleep.deepMinutes / total)
-                        }
-                        if sleep.coreMinutes > 0 {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Theme.teal)
-                                .frame(width: geo.size.width * sleep.coreMinutes / total)
-                        }
-                        if sleep.remMinutes > 0 {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Theme.primary.opacity(0.5))
-                                .frame(width: geo.size.width * sleep.remMinutes / total)
-                        }
-                        if sleep.awakeMinutes > 0 {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(Theme.elevated.opacity(0.5))
-                                .frame(width: geo.size.width * sleep.awakeMinutes / total)
+                // Sleep stages timeline chart
+                if !sleep.segments.isEmpty {
+                    SleepChartView(sleep: sleep)
+                } else {
+                    // Fallback: simple bar if no segment data
+                    let total = max(1, sleep.totalMinutes + sleep.awakeMinutes)
+                    GeometryReader { geo in
+                        HStack(spacing: 1) {
+                            if sleep.deepMinutes > 0 {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color(red: 0.15, green: 0.2, blue: 0.55))
+                                    .frame(width: geo.size.width * sleep.deepMinutes / total)
+                            }
+                            if sleep.coreMinutes > 0 {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color(red: 0.25, green: 0.4, blue: 0.75))
+                                    .frame(width: geo.size.width * sleep.coreMinutes / total)
+                            }
+                            if sleep.remMinutes > 0 {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color(red: 0.4, green: 0.6, blue: 0.9))
+                                    .frame(width: geo.size.width * sleep.remMinutes / total)
+                            }
+                            if sleep.awakeMinutes > 0 {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(Color.orange.opacity(0.5))
+                                    .frame(width: geo.size.width * sleep.awakeMinutes / total)
+                            }
                         }
                     }
-                }
-                .frame(height: 12)
+                    .frame(height: 12)
 
-                // Time
-                HStack {
-                    Text(sleep.bedtime, format: .dateTime.hour().minute())
-                        .font(.caption2).foregroundStyle(Theme.textTertiary)
-                    Spacer()
-                    Text(sleep.wakeTime, format: .dateTime.hour().minute())
-                        .font(.caption2).foregroundStyle(Theme.textTertiary)
+                    HStack {
+                        Text(sleep.bedtime, format: .dateTime.hour().minute())
+                            .font(.caption2).foregroundStyle(Theme.textTertiary)
+                        Spacer()
+                        Text(sleep.wakeTime, format: .dateTime.hour().minute())
+                            .font(.caption2).foregroundStyle(Theme.textTertiary)
+                    }
                 }
             } else {
                 HStack {
@@ -141,22 +146,31 @@ struct NutritionView: View {
 
     private var activityCard: some View {
         HStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Image(systemName: "figure.walk")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.normal)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(healthKit?.stepsToday ?? 0)")
-                        .font(.subheadline.weight(.bold).monospacedDigit())
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("Steps")
-                        .font(.caption2)
+            Button { showStepsDetail = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "figure.walk")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.normal)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(healthKit?.stepsToday ?? 0)")
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Steps")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10))
                         .foregroundStyle(Theme.textTertiary)
                 }
-                Spacer()
+                .padding(16)
+                .card()
             }
-            .padding(16)
-            .card()
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showStepsDetail) {
+                StepsDetailView(healthKit: healthKit)
+            }
 
             HStack(spacing: 10) {
                 Image(systemName: "flame.fill")
