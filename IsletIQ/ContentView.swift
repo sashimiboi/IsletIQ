@@ -99,7 +99,12 @@ struct ContentView: View {
                 Task {
                     await dexcomManager.fetchLatest()
                     dexcomManager.startAutoRefresh()
+                    // Sync to watch immediately after first fetch
+                    syncToWatch()
                 }
+            } else {
+                // Even without Dexcom, sync CSV data to watch
+                syncToWatch()
             }
             // Notifications
             Task {
@@ -146,6 +151,66 @@ struct ContentView: View {
             LogInsulinView(healthKit: healthKit)
         }
         #endif
+    }
+
+    private func syncToWatch() {
+        // Use CSV/stored data if no live readings
+        let readings: [(value: Int, trend: TrendArrow)] = {
+            if !dexcomManager.liveReadings.isEmpty {
+                return dexcomManager.liveReadings.map { (value: $0.safeValue, trend: $0.trendArrow) }
+            }
+            // Fall back to MockData
+            let stored = MockData.glucoseReadings()
+            return stored.suffix(288).map { (value: $0.value, trend: $0.trendArrow) }
+        }()
+
+        guard let latest = readings.first else { return }
+
+        let spark = Array(readings.prefix(6).reversed().map(\.value))
+        let allVals = readings.map(\.value)
+        let avg = allVals.isEmpty ? 0 : allVals.reduce(0, +) / allVals.count
+        let inRange = allVals.filter { $0 >= 70 && $0 <= 180 }.count
+        let tir = allVals.isEmpty ? 0 : Int(Double(inRange) / Double(allVals.count) * 100)
+        let status: String = latest.value < 70 ? "Low" : latest.value <= 180 ? "In Range" : latest.value <= 250 ? "High" : "Urgent High"
+        let color: String = latest.value < 70 ? "low" : latest.value <= 180 ? "normal" : latest.value <= 250 ? "elevated" : "high"
+
+        watchSync.syncGlucose(
+            value: latest.value,
+            trend: latest.trend.rawValue,
+            trendSymbol: latest.trend.symbol,
+            status: status,
+            statusColor: color,
+            sparkline: spark,
+            tir: tir,
+            avg: avg,
+            readingCount: allVals.count
+        )
+
+        // Push CGM data to backend for watch to read
+        Task {
+            await pushCGMToBackend(value: latest.value, trend: latest.trend, status: status, statusColor: color, sparkline: spark, tir: tir, avg: avg, readingCount: allVals.count)
+        }
+    }
+
+    private func pushCGMToBackend(value: Int, trend: TrendArrow, status: String, statusColor: String, sparkline: [Int], tir: Int, avg: Int, readingCount: Int) async {
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/cgm/push") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "glucose": value,
+            "trend": trend.rawValue,
+            "trendSymbol": trend.symbol,
+            "status": status,
+            "statusColor": statusColor,
+            "sparkline": sparkline,
+            "tir": tir,
+            "avg": avg,
+            "readingCount": readingCount,
+            "timestamp": Date().timeIntervalSince1970,
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     #if os(macOS)

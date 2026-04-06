@@ -10,7 +10,7 @@ class WatchConnectivityManager: NSObject {
     var trendSymbol: String = "arrow.right"
     var lastUpdate: Date?
     var sparkline: [Int] = []
-    var status: String = "In Range"
+    var status: String = "--"
     var statusColor: String = "normal"
     var isConnected = false
 
@@ -20,54 +20,104 @@ class WatchConnectivityManager: NSObject {
     var avg: Int = 0
     var readingCount: Int = 0
 
+    private let apiBase = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+
     private override init() {
         super.init()
+
         if WCSession.isSupported() {
             let session = WCSession.default
             session.delegate = self
             session.activate()
         }
 
-        // Fetch from API when WatchConnectivity isn't available
-        Task { await fetchFromAPI() }
+        loadCached()
+        Task { await fetchAll() }
+        startPeriodicRefresh()
     }
 
-    // Direct API fetch - works on simulator and WiFi watch
-    func fetchFromAPI() async {
-        let baseURL = "http://localhost:8000"
+    func refresh() {
+        Task { await fetchAll() }
+    }
 
-        // Fetch supplies
-        if let url = URL(string: "\(baseURL)/api/supplies") {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let items = json["supplies"] as? [[String: Any]] {
-                    await MainActor.run {
-                        supplies = items.map { s in
-                            let qty = s["quantity"] as? Int ?? 0
-                            let rate = s["usage_rate_days"] as? Double ?? 1
-                            return (
-                                name: s["name"] as? String ?? "",
+    private func startPeriodicRefresh() {
+        Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            Task { await self?.fetchAll() }
+        }
+    }
+
+    // MARK: - Fetch from AWS Backend
+
+    func fetchAll() async {
+        await fetchCGM()
+        await fetchSupplies()
+        await fetchMetrics()
+    }
+
+    private func fetchCGM() async {
+        guard let url = URL(string: "\(apiBase)/api/cgm/latest") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let glucose = json["glucose"] as? Int, glucose > 0 {
+                await MainActor.run {
+                    currentGlucose = glucose
+                    trend = json["trend"] as? String ?? "Flat"
+                    trendSymbol = json["trendSymbol"] as? String ?? "arrow.right"
+                    status = json["status"] as? String ?? "--"
+                    statusColor = json["statusColor"] as? String ?? "normal"
+                    sparkline = json["sparkline"] as? [Int] ?? []
+                    tir = json["tir"] as? Int ?? 0
+                    avg = json["avg"] as? Int ?? 0
+                    readingCount = json["readingCount"] as? Int ?? 0
+                    lastUpdate = Date()
+                    saveToCache()
+                    print("[watch] CGM loaded: \(currentGlucose) mg/dL, \(readingCount) readings")
+                }
+            } else {
+                print("[watch] CGM: no data or credentials not set")
+            }
+        } catch {
+            print("[watch] CGM fetch: \(error.localizedDescription)")
+        }
+    }
+
+    private func fetchSupplies() async {
+        guard let url = URL(string: "\(apiBase)/api/supplies") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let items = json["supplies"] as? [[String: Any]] {
+                await MainActor.run {
+                    supplies = items.map { s in
+                        let qty = s["quantity"] as? Int ?? 0
+                        let rate = s["usage_rate_days"] as? Double ?? 1
+                        return (name: s["name"] as? String ?? "",
                                 quantity: qty,
                                 daysLeft: Int(Double(qty) * rate),
-                                urgent: qty <= 3
-                            )
-                        }
+                                urgent: qty <= 3)
                     }
+                    saveToCache()
+                    print("[watch] Supplies loaded: \(supplies.count)")
                 }
-            } catch {}
+            }
+        } catch {
+            print("[watch] Supply fetch: \(error.localizedDescription)")
         }
+    }
 
-        // Fetch latest metrics for stats
-        if let url = URL(string: "\(baseURL)/api/metrics") {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    await MainActor.run {
-                        readingCount = json["total_requests"] as? Int ?? 0
-                    }
+    private func fetchMetrics() async {
+        guard let url = URL(string: "\(apiBase)/api/metrics") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                await MainActor.run {
+                    readingCount = json["total_requests"] as? Int ?? readingCount
+                    saveToCache()
                 }
-            } catch {}
+            }
+        } catch {
+            print("[watch] Metrics fetch: \(error.localizedDescription)")
         }
     }
 
@@ -77,45 +127,67 @@ class WatchConnectivityManager: NSObject {
               WCSession.default.isReachable else { return }
         WCSession.default.sendMessage(["request": "glucose_update"], replyHandler: nil, errorHandler: nil)
     }
+
+    // MARK: - Cache
+
+    private func loadCached() {
+        let d = UserDefaults.standard
+        currentGlucose = d.integer(forKey: "w_glucose")
+        trend = d.string(forKey: "w_trend") ?? "Flat"
+        trendSymbol = d.string(forKey: "w_trendSymbol") ?? "arrow.right"
+        status = d.string(forKey: "w_status") ?? "--"
+        statusColor = d.string(forKey: "w_statusColor") ?? "normal"
+        tir = d.integer(forKey: "w_tir")
+        avg = d.integer(forKey: "w_avg")
+        readingCount = d.integer(forKey: "w_readingCount")
+        sparkline = d.array(forKey: "w_sparkline") as? [Int] ?? []
+        if let ts = d.object(forKey: "w_timestamp") as? Double, ts > 0 {
+            lastUpdate = Date(timeIntervalSince1970: ts)
+        }
+    }
+
+    private func saveToCache() {
+        let d = UserDefaults.standard
+        d.set(currentGlucose, forKey: "w_glucose")
+        d.set(trend, forKey: "w_trend")
+        d.set(trendSymbol, forKey: "w_trendSymbol")
+        d.set(status, forKey: "w_status")
+        d.set(statusColor, forKey: "w_statusColor")
+        d.set(tir, forKey: "w_tir")
+        d.set(avg, forKey: "w_avg")
+        d.set(readingCount, forKey: "w_readingCount")
+        d.set(sparkline, forKey: "w_sparkline")
+        d.set(lastUpdate?.timeIntervalSince1970 ?? 0, forKey: "w_timestamp")
+    }
 }
 
 extension WatchConnectivityManager: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
-        DispatchQueue.main.async {
-            self.isConnected = activationState == .activated
-        }
-        if activationState == .activated {
-            requestUpdate()
-        }
+        DispatchQueue.main.async { self.isConnected = activationState == .activated }
+        if activationState == .activated { requestUpdate() }
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        DispatchQueue.main.async {
-            self.updateFromContext(applicationContext)
-        }
+        DispatchQueue.main.async { self.updateFromWC(applicationContext) }
     }
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        DispatchQueue.main.async {
-            self.updateFromContext(message)
-        }
+        DispatchQueue.main.async { self.updateFromWC(message) }
     }
 
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        DispatchQueue.main.async {
-            self.updateFromContext(userInfo)
-        }
+        DispatchQueue.main.async { self.updateFromWC(userInfo) }
     }
 
-    private func updateFromContext(_ data: [String: Any]) {
+    private func updateFromWC(_ data: [String: Any]) {
         if let glucose = data["glucose"] as? Int { currentGlucose = glucose }
         if let t = data["trend"] as? String { trend = t }
         if let sym = data["trendSymbol"] as? String { trendSymbol = sym }
         if let s = data["status"] as? String { status = s }
         if let c = data["statusColor"] as? String { statusColor = c }
         if let sp = data["sparkline"] as? [Int] { sparkline = sp }
-        if let tir = data["tir"] as? Int { self.tir = tir }
-        if let avg = data["avg"] as? Int { self.avg = avg }
+        if let t = data["tir"] as? Int { self.tir = t }
+        if let a = data["avg"] as? Int { self.avg = a }
         if let count = data["readingCount"] as? Int { readingCount = count }
         if let ts = data["timestamp"] as? Double { lastUpdate = Date(timeIntervalSince1970: ts) }
 
@@ -127,5 +199,8 @@ extension WatchConnectivityManager: WCSessionDelegate {
                  urgent: s["urgent"] as? Bool ?? false)
             }
         }
+
+        saveToCache()
+        print("[watch] Received WC data: glucose=\(currentGlucose)")
     }
 }

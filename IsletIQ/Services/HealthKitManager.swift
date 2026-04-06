@@ -61,6 +61,8 @@ final class HealthKitManager {
     var stepsToday: Int = 0
     var hourlySteps: [(hour: Int, steps: Int)] = []
     var weeklySteps: [(date: Date, steps: Int)] = []
+    var hourlyCals: [(hour: Int, cals: Double)] = []
+    var weeklyCals: [(date: Date, cals: Double)] = []
     var activeCaloriesToday: Double = 0
 
     // Types we need
@@ -420,7 +422,7 @@ final class HealthKitManager {
     func fetchWeeklySteps() async {
         guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return }
         let cal = Calendar.current
-        let sevenDaysAgo = cal.date(byAdding: .day, value: -6, to: cal.startOfDay(for: .now))!
+        let sevenDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let query = HKStatisticsCollectionQuery(
@@ -438,6 +440,65 @@ final class HealthKitManager {
                 }
                 Task { @MainActor in
                     self.weeklySteps = daily
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Fetch Hourly Calories
+
+    func fetchHourlyCals() async {
+        guard let calType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return }
+        let cal = Calendar.current
+        let startOfDay = cal.startOfDay(for: .now)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: calType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: startOfDay, end: .now),
+                options: .cumulativeSum,
+                anchorDate: startOfDay,
+                intervalComponents: DateComponents(hour: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var hourly: [(hour: Int, cals: Double)] = []
+                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
+                    let hour = cal.component(.hour, from: stats.startDate)
+                    let cals = stats.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                    hourly.append((hour: hour, cals: cals))
+                }
+                Task { @MainActor in
+                    self.hourlyCals = hourly
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    func fetchWeeklyCals() async {
+        guard let calType = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return }
+        let cal = Calendar.current
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: calType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now),
+                options: .cumulativeSum,
+                anchorDate: thirtyDaysAgo,
+                intervalComponents: DateComponents(day: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var daily: [(date: Date, cals: Double)] = []
+                results?.enumerateStatistics(from: thirtyDaysAgo, to: .now) { stats, _ in
+                    let cals = stats.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
+                    daily.append((date: stats.startDate, cals: cals))
+                }
+                Task { @MainActor in
+                    self.weeklyCals = daily
                     continuation.resume()
                 }
             }

@@ -21,7 +21,6 @@ enum ChartRange: String, CaseIterable {
     case day = "24h"
     case threeDays = "3d"
     case week = "7d"
-    case twoWeeks = "14d"
     case month = "30d"
 
     var seconds: TimeInterval {
@@ -30,7 +29,6 @@ enum ChartRange: String, CaseIterable {
         case .day: 86400
         case .threeDays: 3 * 86400
         case .week: 7 * 86400
-        case .twoWeeks: 14 * 86400
         case .month: 30 * 86400
         }
     }
@@ -56,15 +54,28 @@ struct DashboardView: View {
 
     // Unified data source — live Dexcom if available, else stored
     private var allReadings: [ReadingPoint] {
-        if let mgr = dexcomManager, !mgr.liveReadings.isEmpty {
-            return mgr.liveReadings.compactMap { r in
-                guard let ts = r.timestamp else { return nil }
-                return ReadingPoint(value: r.safeValue, timestamp: ts, trend: r.trendArrow)
-            }.sorted { $0.timestamp > $1.timestamp }
-        }
-        return storedReadings.map {
+        // Start with stored/CSV data
+        var readings = storedReadings.map {
             ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow)
         }
+
+        // Merge live Dexcom data (deduplicate by timestamp within 2 min)
+        if let mgr = dexcomManager, !mgr.liveReadings.isEmpty {
+            let livePoints = mgr.liveReadings.compactMap { r -> ReadingPoint? in
+                guard let ts = r.timestamp else { return nil }
+                return ReadingPoint(value: r.safeValue, timestamp: ts, trend: r.trendArrow)
+            }
+
+            let existingTimestamps = Set(readings.map { Int($0.timestamp.timeIntervalSince1970 / 120) })
+            for pt in livePoints {
+                let bucket = Int(pt.timestamp.timeIntervalSince1970 / 120)
+                if !existingTimestamps.contains(bucket) {
+                    readings.append(pt)
+                }
+            }
+        }
+
+        return readings.sorted { $0.timestamp > $1.timestamp }
     }
 
     private var latest: ReadingPoint? { allReadings.first }

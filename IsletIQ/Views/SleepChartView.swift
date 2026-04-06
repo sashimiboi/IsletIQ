@@ -17,7 +17,6 @@ struct SleepChartView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // Chart
             GeometryReader { geo in
                 let w = geo.size.width
                 let h = geo.size.height
@@ -82,19 +81,25 @@ struct SleepChartView: View {
                         .stroke(Color.white.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round))
                     }
 
-                    // Tooltip scrubber
+                    // Tooltip
                     if let seg = selectedSegment {
                         let xMid = labelW + chartW * CGFloat(((seg.start.timeIntervalSince1970 + seg.end.timeIntervalSince1970) / 2 - bedtime) / timeRange)
 
-                        // Vertical line
                         Path { p in
                             p.move(to: CGPoint(x: xMid, y: 0))
                             p.addLine(to: CGPoint(x: xMid, y: h))
                         }
                         .stroke(Color.white.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
-                        // Tooltip card
+                        let dotY = rowH * CGFloat(seg.stage.depth) + rowH / 2
+                        Circle()
+                            .fill(stageColors[seg.stage] ?? .gray)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                            .position(x: xMid, y: dotY)
+
                         let tooltipX = min(max(xMid, 70), w - 70)
+                        let tooltipY: CGFloat = dotY > h / 2 ? dotY - 36 : dotY + 36
 
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 5) {
@@ -120,7 +125,7 @@ struct SleepChartView: View {
                         .padding(.vertical, 6)
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
                         .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.white.opacity(0.15), lineWidth: 0.5))
-                        .position(x: tooltipX, y: -20)
+                        .position(x: tooltipX, y: tooltipY)
                     }
                 }
                 .contentShape(Rectangle())
@@ -129,9 +134,20 @@ struct SleepChartView: View {
                         .onChanged { drag in
                             let xPct = max(0, min(1, (drag.location.x - labelW) / chartW))
                             let touchTime = bedtime + xPct * timeRange
-                            // Find segment at this time
-                            selectedSegment = sleep.segments.first { seg in
-                                touchTime >= seg.start.timeIntervalSince1970 && touchTime <= seg.end.timeIntervalSince1970
+
+                            let match = sleep.segments.first { seg in
+                                touchTime >= seg.start.timeIntervalSince1970 &&
+                                touchTime <= seg.end.timeIntervalSince1970
+                            }
+
+                            if let match {
+                                selectedSegment = match
+                            } else {
+                                selectedSegment = sleep.segments.min(by: {
+                                    let mid0 = ($0.start.timeIntervalSince1970 + $0.end.timeIntervalSince1970) / 2
+                                    let mid1 = ($1.start.timeIntervalSince1970 + $1.end.timeIntervalSince1970) / 2
+                                    return abs(mid0 - touchTime) < abs(mid1 - touchTime)
+                                })
                             }
                         }
                         .onEnded { _ in
@@ -141,7 +157,7 @@ struct SleepChartView: View {
                         }
                 )
             }
-            .frame(height: 120) // extra height for tooltip
+            .frame(height: 120)
 
             // Time axis
             HStack {

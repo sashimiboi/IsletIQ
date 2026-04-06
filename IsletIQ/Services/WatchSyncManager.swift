@@ -33,13 +33,26 @@ class WatchSyncManager: NSObject {
             "timestamp": Date().timeIntervalSince1970,
         ]
 
-        // Use applicationContext for guaranteed delivery (even if watch is asleep)
-        try? WCSession.default.updateApplicationContext(context)
+        let session = WCSession.default
+        print("[watch-sync] State: activated=\(session.activationState == .activated) paired=\(session.isPaired) installed=\(session.isWatchAppInstalled) reachable=\(session.isReachable)")
 
-        // Also send as message for immediate delivery if watch is reachable
-        if WCSession.default.isReachable {
-            WCSession.default.sendMessage(context, replyHandler: nil)
+        // Try all delivery methods
+        do {
+            try session.updateApplicationContext(context)
+            print("[watch-sync] Context sent OK")
+        } catch {
+            print("[watch-sync] Context failed: \(error.localizedDescription)")
         }
+
+        if session.isReachable {
+            session.sendMessage(context, replyHandler: nil, errorHandler: { err in
+                print("[watch-sync] Message failed: \(err.localizedDescription)")
+            })
+            print("[watch-sync] Message sent")
+        }
+
+        session.transferUserInfo(context)
+        print("[watch-sync] UserInfo queued")
     }
 
     // Send supply data to watch

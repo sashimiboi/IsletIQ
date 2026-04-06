@@ -1,12 +1,12 @@
 import SwiftUI
 
-struct StepsDetailView: View {
+struct CaloriesDetailView: View {
     var healthKit: HealthKitManager?
-    @State private var selectedTab: StepsPeriod = .today
+    @State private var selectedTab: CalPeriod = .today
     @State private var selectedBar: Int? = nil
     @Environment(\.dismiss) private var dismiss
 
-    enum StepsPeriod: String, CaseIterable {
+    enum CalPeriod: String, CaseIterable {
         case today = "Today"
         case threeDays = "3d"
         case week = "7d"
@@ -17,20 +17,18 @@ struct StepsDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    // Total steps header - changes with filter
                     VStack(spacing: 4) {
-                        Text("\(filteredStepTotal)")
+                        Text("\(filteredCalTotal)")
                             .font(.system(size: 44, weight: .bold, design: .rounded))
-                            .foregroundStyle(Theme.primary)
-                        Text(selectedTab == .today ? "steps today" : "steps (\(selectedTab.rawValue))")
+                            .foregroundStyle(Theme.elevated)
+                        Text(selectedTab == .today ? "active cal today" : "active cal (\(selectedTab.rawValue))")
                             .font(.subheadline)
                             .foregroundStyle(Theme.textSecondary)
                     }
                     .padding(.top, 8)
 
-                    // Period toggles
                     HStack(spacing: 4) {
-                        ForEach(StepsPeriod.allCases, id: \.self) { period in
+                        ForEach(CalPeriod.allCases, id: \.self) { period in
                             Button {
                                 withAnimation(.easeInOut(duration: 0.2)) {
                                     selectedTab = period
@@ -43,7 +41,7 @@ struct StepsDetailView: View {
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
                                     .background(
-                                        selectedTab == period ? Theme.primary : Theme.muted,
+                                        selectedTab == period ? Theme.elevated : Theme.muted,
                                         in: RoundedRectangle(cornerRadius: 8)
                                     )
                             }
@@ -51,7 +49,6 @@ struct StepsDetailView: View {
                         }
                     }
 
-                    // Chart
                     if selectedTab == .today {
                         hourlyChart
                     } else {
@@ -64,7 +61,7 @@ struct StepsDetailView: View {
                 .padding(.bottom, 20)
             }
             .background(Theme.bg)
-            .navigationTitle("Steps")
+            .navigationTitle("Active Calories")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -73,30 +70,30 @@ struct StepsDetailView: View {
                 }
             }
             .task {
-                await healthKit?.fetchHourlySteps()
-                await healthKit?.fetchWeeklySteps()
+                await healthKit?.fetchHourlyCals()
+                await healthKit?.fetchWeeklyCals()
             }
         }
     }
 
-    // MARK: - Hourly Bar Chart with Drag Tooltip
+    // MARK: - Hourly Chart
 
     private var hourlyChart: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Steps by Hour")
+                Text("Calories by Hour")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
-                if let idx = selectedBar, let data = healthKit?.hourlySteps, idx < data.count {
-                    Text("\(data[idx].steps) steps")
+                if let idx = selectedBar, let data = healthKit?.hourlyCals, idx < data.count {
+                    Text("\(Int(data[idx].cals)) cal")
                         .font(.caption.weight(.bold).monospacedDigit())
-                        .foregroundStyle(Theme.primary)
+                        .foregroundStyle(Theme.elevated)
                 }
             }
 
-            let data = healthKit?.hourlySteps ?? []
-            let maxSteps = max(100, data.map(\.steps).max() ?? 100)
+            let data = healthKit?.hourlyCals ?? []
+            let maxCals = max(10, data.map(\.cals).max() ?? 10)
 
             GeometryReader { geo in
                 let w = geo.size.width
@@ -106,52 +103,32 @@ struct StepsDetailView: View {
                 let barW = (w - CGFloat(barCount - 1) * gap) / CGFloat(barCount)
 
                 ZStack(alignment: .topLeading) {
-                    // Goal line
-                    let goalPerHr = 417
-                    if goalPerHr < maxSteps {
-                        let goalY = h - h * CGFloat(goalPerHr) / CGFloat(maxSteps)
-                        Path { p in
-                            p.move(to: CGPoint(x: 0, y: goalY))
-                            p.addLine(to: CGPoint(x: w, y: goalY))
-                        }
-                        .stroke(Theme.normal.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-
-                        Text("10K goal")
-                            .font(.system(size: 7))
-                            .foregroundStyle(Theme.normal.opacity(0.5))
-                            .position(x: w - 22, y: goalY - 7)
-                    }
-
-                    // Bars
                     ForEach(Array(data.enumerated()), id: \.offset) { i, entry in
-                        let barH = max(2, h * CGFloat(entry.steps) / CGFloat(maxSteps))
+                        let barH = max(2, h * CGFloat(entry.cals / maxCals))
                         let x = CGFloat(i) * (barW + gap)
                         let isSelected = selectedBar == i
 
                         RoundedRectangle(cornerRadius: 3)
-                            .fill(isSelected ? Theme.primary : Theme.primary.opacity(0.5))
+                            .fill(isSelected ? Theme.elevated : Theme.elevated.opacity(0.5))
                             .frame(width: barW, height: barH)
                             .position(x: x + barW / 2, y: h - barH / 2)
                     }
 
-                    // Tooltip
                     if let idx = selectedBar, idx < data.count {
                         let x = CGFloat(idx) * (barW + gap) + barW / 2
                         let entry = data[idx]
-                        let barH = h * CGFloat(entry.steps) / CGFloat(maxSteps)
+                        let barH = h * CGFloat(entry.cals / maxCals)
 
-                        // Vertical line
                         Path { p in
                             p.move(to: CGPoint(x: x, y: 0))
                             p.addLine(to: CGPoint(x: x, y: h))
                         }
-                        .stroke(Theme.primary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .stroke(Theme.elevated.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
-                        // Tooltip card
                         VStack(spacing: 2) {
-                            Text("\(entry.steps)")
+                            Text("\(Int(entry.cals))")
                                 .font(.caption2.weight(.bold).monospacedDigit())
-                                .foregroundStyle(Theme.primary)
+                                .foregroundStyle(Theme.elevated)
                             Text(hourLabel(entry.hour))
                                 .font(.system(size: 8).monospacedDigit())
                                 .foregroundStyle(Theme.textSecondary)
@@ -168,11 +145,8 @@ struct StepsDetailView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
-                            let barTotal = barW + gap
-                            let idx = Int(drag.location.x / barTotal)
-                            if idx >= 0 && idx < data.count {
-                                selectedBar = idx
-                            }
+                            let idx = Int(drag.location.x / ((barW + gap)))
+                            if idx >= 0 && idx < data.count { selectedBar = idx }
                         }
                         .onEnded { _ in
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -183,7 +157,6 @@ struct StepsDetailView: View {
             }
             .frame(height: 160)
 
-            // Hour labels
             HStack {
                 ForEach([0, 6, 12, 18, 23], id: \.self) { hr in
                     if hr > 0 { Spacer() }
@@ -197,20 +170,20 @@ struct StepsDetailView: View {
         .card()
     }
 
-    // MARK: - Daily Bar Chart with Drag Tooltip
+    // MARK: - Daily Chart
 
     private var dailyChart: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Steps by Day")
+                Text("Calories by Day")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
-                if let idx = selectedBar, let data = filteredWeeklySteps, idx < data.count {
+                if let idx = selectedBar, let data = filteredDailyCals, idx < data.count {
                     VStack(alignment: .trailing, spacing: 1) {
-                        Text("\(data[idx].steps)")
+                        Text("\(Int(data[idx].cals)) cal")
                             .font(.caption.weight(.bold).monospacedDigit())
-                            .foregroundStyle(Theme.primary)
+                            .foregroundStyle(Theme.elevated)
                         Text(data[idx].date, format: .dateTime.month(.abbreviated).day())
                             .font(.system(size: 9))
                             .foregroundStyle(Theme.textSecondary)
@@ -218,9 +191,9 @@ struct StepsDetailView: View {
                 }
             }
 
-            let data = filteredWeeklySteps ?? []
-            let maxSteps = max(100, data.map(\.steps).max() ?? 100)
-            let avgSteps = data.isEmpty ? 0 : data.map(\.steps).reduce(0, +) / data.count
+            let data = filteredDailyCals ?? []
+            let maxCals = max(10, data.map(\.cals).max() ?? 10)
+            let avgCals = data.isEmpty ? 0 : Int(data.map(\.cals).reduce(0, +) / Double(data.count))
 
             GeometryReader { geo in
                 let w = geo.size.width
@@ -230,58 +203,50 @@ struct StepsDetailView: View {
                 let barW = max(4, (w - CGFloat(barCount - 1) * gap) / CGFloat(barCount))
 
                 ZStack(alignment: .topLeading) {
-                    // Average line
-                    if avgSteps > 0 {
-                        let avgY = h - h * CGFloat(avgSteps) / CGFloat(maxSteps)
+                    if avgCals > 0 {
+                        let avgY = h - h * CGFloat(avgCals) / CGFloat(maxCals)
                         Path { p in
                             p.move(to: CGPoint(x: 0, y: avgY))
                             p.addLine(to: CGPoint(x: w, y: avgY))
                         }
                         .stroke(Theme.teal.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
 
-                        Text("avg \(avgSteps)")
+                        Text("avg \(avgCals)")
                             .font(.system(size: 7).monospacedDigit())
                             .foregroundStyle(Theme.teal)
                             .position(x: w - 22, y: avgY - 7)
                     }
 
-                    // Bars
                     ForEach(Array(data.enumerated()), id: \.offset) { i, entry in
-                        let barH = max(2, h * CGFloat(entry.steps) / CGFloat(maxSteps))
+                        let barH = max(2, h * CGFloat(entry.cals / maxCals))
                         let x = CGFloat(i) * (barW + gap)
                         let isToday = Calendar.current.isDateInToday(entry.date)
                         let isSelected = selectedBar == i
 
                         RoundedRectangle(cornerRadius: barW > 8 ? 4 : 2)
-                            .fill(isSelected ? Theme.primary : (isToday ? Theme.primary : Theme.primary.opacity(0.4)))
+                            .fill(isSelected ? Theme.elevated : (isToday ? Theme.elevated : Theme.elevated.opacity(0.4)))
                             .frame(width: barW, height: barH)
                             .position(x: x + barW / 2, y: h - barH / 2)
                     }
 
-                    // Tooltip
                     if let idx = selectedBar, idx < data.count {
-                        let barTotal = barW + gap
-                        let x = CGFloat(idx) * barTotal + barW / 2
+                        let x = CGFloat(idx) * (barW + gap) + barW / 2
                         let entry = data[idx]
-                        let barH = h * CGFloat(entry.steps) / CGFloat(maxSteps)
+                        let barH = h * CGFloat(entry.cals / maxCals)
 
                         Path { p in
                             p.move(to: CGPoint(x: x, y: 0))
                             p.addLine(to: CGPoint(x: x, y: h))
                         }
-                        .stroke(Theme.primary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                        .stroke(Theme.elevated.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
 
                         VStack(spacing: 2) {
-                            Text("\(entry.steps)")
+                            Text("\(Int(entry.cals))")
                                 .font(.caption2.weight(.bold).monospacedDigit())
-                                .foregroundStyle(Theme.primary)
+                                .foregroundStyle(Theme.elevated)
                             Text(entry.date, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day())
                                 .font(.system(size: 8))
                                 .foregroundStyle(Theme.textSecondary)
-                            let miles = Double(entry.steps) * 0.0004
-                            Text(String(format: "%.1f mi", miles))
-                                .font(.system(size: 7).monospacedDigit())
-                                .foregroundStyle(Theme.textTertiary)
                         }
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
@@ -295,11 +260,9 @@ struct StepsDetailView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
-                            let barTotal = barW + gap
+                            let barTotal = max(1, (geo.size.width - CGFloat(max(0, data.count - 1)) * gap) / CGFloat(max(1, data.count)) + gap)
                             let idx = Int(drag.location.x / barTotal)
-                            if idx >= 0 && idx < data.count {
-                                selectedBar = idx
-                            }
+                            if idx >= 0 && idx < data.count { selectedBar = idx }
                         }
                         .onEnded { _ in
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
@@ -310,39 +273,33 @@ struct StepsDetailView: View {
             }
             .frame(height: 160)
 
-            // Date labels
             if !data.isEmpty {
                 HStack {
                     Text(data.first!.date, format: .dateTime.month(.abbreviated).day())
-                        .font(.system(size: 8).monospacedDigit())
-                        .foregroundStyle(Theme.textTertiary)
                     Spacer()
                     if data.count > 2 {
-                        let mid = data[data.count / 2]
-                        Text(mid.date, format: .dateTime.month(.abbreviated).day())
-                            .font(.system(size: 8).monospacedDigit())
-                            .foregroundStyle(Theme.textTertiary)
+                        Text(data[data.count / 2].date, format: .dateTime.month(.abbreviated).day())
                     }
                     Spacer()
                     Text(data.last!.date, format: .dateTime.month(.abbreviated).day())
-                        .font(.system(size: 8).monospacedDigit())
-                        .foregroundStyle(Theme.textTertiary)
                 }
+                .font(.system(size: 8).monospacedDigit())
+                .foregroundStyle(Theme.textTertiary)
             }
         }
         .padding(20)
         .card()
     }
 
-    private var filteredStepTotal: Int {
+    private var filteredCalTotal: Int {
         if selectedTab == .today {
-            return healthKit?.stepsToday ?? 0
+            return Int(healthKit?.activeCaloriesToday ?? 0)
         }
-        return (filteredWeeklySteps ?? []).map(\.steps).reduce(0, +)
+        return Int((filteredDailyCals ?? []).map(\.cals).reduce(0, +))
     }
 
-    private var filteredWeeklySteps: [(date: Date, steps: Int)]? {
-        guard let data = healthKit?.weeklySteps else { return nil }
+    private var filteredDailyCals: [(date: Date, cals: Double)]? {
+        guard let data = healthKit?.weeklyCals else { return nil }
         let days: Int
         switch selectedTab {
         case .today: days = 1
@@ -357,12 +314,12 @@ struct StepsDetailView: View {
     // MARK: - Stats
 
     private var statsCard: some View {
-        let allData = healthKit?.weeklySteps ?? []
+        let allData = healthKit?.weeklyCals ?? []
         let cutoff7 = Calendar.current.date(byAdding: .day, value: -7, to: .now)!
-        let last7 = allData.filter { $0.date >= cutoff7 }
-        let totalWeek = last7.map(\.steps).reduce(0, +)
-        let avgWeek = last7.isEmpty ? 0 : totalWeek / last7.count
-        let bestDay = last7.max(by: { $0.steps < $1.steps })
+        let weekly = allData.filter { $0.date >= cutoff7 }
+        let totalWeek = Int(weekly.map(\.cals).reduce(0, +))
+        let avgWeek = weekly.isEmpty ? 0 : totalWeek / weekly.count
+        let bestDay = weekly.max(by: { $0.cals < $1.cals })
 
         return VStack(alignment: .leading, spacing: 12) {
             Text("Summary")
@@ -370,30 +327,18 @@ struct StepsDetailView: View {
                 .foregroundStyle(Theme.textPrimary)
 
             HStack(spacing: 0) {
-                StatItem(label: "Today", value: "\(healthKit?.stepsToday ?? 0)", color: Theme.primary)
+                CalStatItem(label: "Today", value: "\(Int(healthKit?.activeCaloriesToday ?? 0))", color: Theme.elevated)
                 Spacer()
-                StatItem(label: "7-Day Avg", value: "\(avgWeek)", color: Theme.teal)
+                CalStatItem(label: "7-Day Avg", value: "\(avgWeek)", color: Theme.teal)
                 Spacer()
-                StatItem(label: "Best Day", value: "\(bestDay?.steps ?? 0)", color: Theme.normal)
+                CalStatItem(label: "Best Day", value: "\(Int(bestDay?.cals ?? 0))", color: Theme.normal)
                 Spacer()
-                StatItem(label: "This Week", value: "\(totalWeek)", color: Theme.primary)
-            }
-
-            let miles = Double(healthKit?.stepsToday ?? 0) * 0.0004
-            HStack(spacing: 6) {
-                Image(systemName: "figure.walk")
-                    .font(.caption)
-                    .foregroundStyle(Theme.normal)
-                Text(String(format: "%.1f miles today", miles))
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
+                CalStatItem(label: "This Week", value: "\(totalWeek)", color: Theme.elevated)
             }
         }
         .padding(20)
         .card()
     }
-
-    // MARK: - Helpers
 
     private func hourLabel(_ hr: Int) -> String {
         if hr == 0 { return "12a" }
@@ -403,7 +348,7 @@ struct StepsDetailView: View {
     }
 }
 
-private struct StatItem: View {
+private struct CalStatItem: View {
     let label: String
     let value: String
     let color: Color

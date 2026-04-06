@@ -4,6 +4,7 @@ struct NutritionView: View {
     var healthKit: HealthKitManager?
     @State private var showLogMeal = false
     @State private var showStepsDetail = false
+    @State private var showCaloriesDetail = false
     @State private var isLoading = false
 
     var body: some View {
@@ -172,22 +173,31 @@ struct NutritionView: View {
                 StepsDetailView(healthKit: healthKit)
             }
 
-            HStack(spacing: 10) {
-                Image(systemName: "flame.fill")
-                    .font(.subheadline)
-                    .foregroundStyle(Theme.elevated)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(Int(healthKit?.activeCaloriesToday ?? 0))")
-                        .font(.subheadline.weight(.bold).monospacedDigit())
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("Active Cal")
-                        .font(.caption2)
+            Button { showCaloriesDetail = true } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "flame.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(Theme.elevated)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(Int(healthKit?.activeCaloriesToday ?? 0))")
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                            .foregroundStyle(Theme.textPrimary)
+                        Text("Active Cal")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10))
                         .foregroundStyle(Theme.textTertiary)
                 }
-                Spacer()
+                .padding(16)
+                .card()
             }
-            .padding(16)
-            .card()
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showCaloriesDetail) {
+                CaloriesDetailView(healthKit: healthKit)
+            }
         }
     }
 
@@ -246,7 +256,7 @@ struct NutritionView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    QuickMealChip(name: "Coffee", carbs: 0, icon: "cup.and.saucer.fill") { await logQuick("Coffee", carbs: 0, cals: 5) }
+                    QuickMealChip(name: "Latte", carbs: 15, icon: "cup.and.saucer.fill") { await logQuick("Latte", carbs: 15, cals: 190, protein: 10, fat: 7) }
                     QuickMealChip(name: "Apple", carbs: 25, icon: "leaf.fill") { await logQuick("Apple", carbs: 25, cals: 95) }
                     QuickMealChip(name: "Juice Box", carbs: 22, icon: "drop.fill") { await logQuick("Juice Box", carbs: 22, cals: 90) }
                     QuickMealChip(name: "Glucose Tabs", carbs: 16, icon: "pills.fill") { await logQuick("Glucose Tabs", carbs: 16, cals: 60) }

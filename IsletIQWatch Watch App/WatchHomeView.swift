@@ -17,7 +17,10 @@ struct WatchHomeView: View {
                 .padding(.horizontal, 4)
             }
             .navigationTitle("IsletIQ")
-            .onAppear { connectivity.requestUpdate() }
+            .onAppear {
+                connectivity.requestUpdate()
+                connectivity.refresh()
+            }
         }
     }
 
@@ -262,6 +265,16 @@ struct WatchSparkline: View {
             }
         }
     }
+}
+
+// MARK: - Watch Theme (standalone, no dependency on iOS Theme)
+enum Theme {
+    static let primary = Color(red: 0, green: 0.2, blue: 0.63)
+    static let teal = Color(red: 0.36, green: 0.7, blue: 0.8)
+    static let normal = Color.green
+    static let elevated = Color.orange
+    static let high = Color.red
+    static let textTertiary = Color.gray
 }
 
 #Preview {
