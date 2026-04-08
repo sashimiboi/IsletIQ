@@ -46,7 +46,8 @@ struct IsletIQApp: App {
             } catch {
                 // Absolute last resort -- create a bare container
                 print("[IsletIQ] In-memory store also failed: \(error). Creating bare container.")
-                return try! ModelContainer(for: Schema([]))
+                // fatalError is explicit about the crash vs a silent try!
+                fatalError("[IsletIQ] Cannot create any ModelContainer: \(error)")
             }
         }
     }()

@@ -19,6 +19,7 @@ let agents: [AgentDef] = [
     AgentDef(id: "pump", name: "Pump", icon: "drop.circle", description: "Insulin dosing & pump management"),
     AgentDef(id: "nutrition", name: "Nutrition", icon: "fork.knife", description: "Meal estimation & HealthKit logging"),
     AgentDef(id: "supply", name: "Supplies", icon: "shippingbox", description: "Track & manage diabetes supplies"),
+    AgentDef(id: "medication", name: "Medications", icon: "pills.fill", description: "Medication tracking & dose logging"),
 ]
 
 // MARK: - Tool Definitions
@@ -52,6 +53,11 @@ let defaultTools: [AgentTool] = [
     AgentTool(id: "update_supply_quantity", name: "Update Supply", icon: "pencil", category: "Supplies", description: "Update supply quantity", isEnabled: true),
     AgentTool(id: "use_supply", name: "Use Supply", icon: "minus.circle", category: "Supplies", description: "Record using a supply", isEnabled: true),
     AgentTool(id: "get_supply_status", name: "Supply Status", icon: "shippingbox", category: "Supplies", description: "Check all supply levels and alerts", isEnabled: true),
+    // Medications
+    AgentTool(id: "add_medication", name: "Add Medication", icon: "plus.circle.fill", category: "Medications", description: "Add a new medication to your list", isEnabled: true),
+    AgentTool(id: "log_medication_dose", name: "Log Dose", icon: "checkmark.circle.fill", category: "Medications", description: "Record a medication dose taken", isEnabled: true),
+    AgentTool(id: "get_medication_schedule", name: "Today's Schedule", icon: "calendar.badge.clock", category: "Medications", description: "View today's medication schedule", isEnabled: true),
+    AgentTool(id: "update_medication", name: "Update Medication", icon: "pencil.circle", category: "Medications", description: "Update medication details", isEnabled: true),
     // Research
     AgentTool(id: "search_literature", name: "Search Literature", icon: "doc.text.magnifyingglass", category: "Research", description: "Search diabetes research papers", isEnabled: true),
     AgentTool(id: "search_clinical_trials", name: "Clinical Trials", icon: "testtube.2", category: "Research", description: "Search diabetes clinical trials", isEnabled: true),
@@ -68,6 +74,7 @@ struct ChatMessage: Identifiable, Equatable {
     let timestamp: Date
     var thinking: [ThinkingStep]?
     var imageData: Data?
+    var imageDataArray: [Data]?
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id && lhs.content == rhs.content && lhs.thinking?.count == rhs.thinking?.count
@@ -90,6 +97,7 @@ enum ThinkingType { case thinking, toolCall, toolResult }
 struct AgentChatView: View {
     var dexcomManager: DexcomManager?
     var healthKit: HealthKitManager?
+    var medicationClient: MedicationClient?
 
     @State private var selectedAgent = agents[0]
     @State private var inputText = ""
@@ -101,8 +109,8 @@ struct AgentChatView: View {
     @State private var sessionId: String?
     @State private var backendOnline = false
     @State private var useStreaming = true
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var attachedImage: Data?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
+    @State private var attachedImages: [Data] = []
     @State private var showCamera = false
     @State private var showSessions = false
     @State private var isRecording = false
@@ -111,6 +119,7 @@ struct AgentChatView: View {
     @State private var speechManager = SpeechManager()
     #endif
     @State private var sessions: [(id: String, title: String, agent: String, date: String)] = []
+    @State private var todayMedications: [TodayMedication] = []
     @FocusState private var inputFocused: Bool
 
     let agentClient = AgentClient()
@@ -216,7 +225,18 @@ struct AgentChatView: View {
             Task {
                 let online = await agentClient.healthCheck()
                 await MainActor.run { backendOnline = online }
-                if online { await fetchSessions() }
+                if online {
+                    await fetchSessions()
+                    // Auto-load the most recent session so chat history is visible
+                    if messages.isEmpty, let latest = sessions.first {
+                        await loadSession(latest.id)
+                    }
+                }
+                // Load today's medication schedule for agent context
+                if let medClient = medicationClient {
+                    let meds = await medClient.fetchTodaySchedule()
+                    await MainActor.run { todayMedications = meds }
+                }
             }
         }
     }
@@ -229,6 +249,7 @@ struct AgentChatView: View {
             "pump": ["calculate_bolus", "get_device_info", "get_insulin_info", "analyze_meal_impact", "generate_report"],
             "nutrition": ["estimate_meal", "lookup_food", "log_meal_request", "analyze_meal_impact", "calculate_bolus"],
             "supply": ["add_supply", "update_supply_quantity", "use_supply", "get_supply_status", "generate_report"],
+            "medication": ["add_medication", "log_medication_dose", "get_medication_schedule", "update_medication", "generate_report"],
         ]
 
         let enabled = agentTools[agent.id] ?? Set(defaultTools.map(\.id))
@@ -278,7 +299,9 @@ struct AgentChatView: View {
     private func fetchSessions() async {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sessions?limit=20") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            APIConfig.applyAuth(to: &request)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let items = json["sessions"] as? [[String: Any]] {
                 await MainActor.run {
@@ -318,7 +341,9 @@ struct AgentChatView: View {
     private func loadSession(_ sid: String) async {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sessions/\(sid)") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            APIConfig.applyAuth(to: &request)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let msgs = json["messages"] as? [[String: Any]] {
                 var loaded: [ChatMessage] = []
@@ -387,6 +412,7 @@ struct AgentChatView: View {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sessions/\(sessionId)") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
+        APIConfig.applyAuth(to: &request)
         _ = try? await URLSession.shared.data(for: request)
         await fetchSessions()
     }
@@ -512,30 +538,32 @@ struct AgentChatView: View {
 
     private var inputBar: some View {
         VStack(spacing: 6) {
-            // Image preview
-            if let imgData = attachedImage {
+            // Image previews
+            if !attachedImages.isEmpty {
                 #if os(iOS)
-                if let uiImage = UIImage(data: imgData) {
-                    HStack {
-                        Image(uiImage: uiImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 60, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(
-                                Button {
-                                    attachedImage = nil
-                                    selectedPhoto = nil
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.white)
-                                        .shadow(radius: 2)
-                                }
-                                .offset(x: 6, y: -6),
-                                alignment: .topTrailing
-                            )
-                        Spacer()
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(attachedImages.enumerated()), id: \.offset) { index, imgData in
+                            if let uiImage = UIImage(data: imgData) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 60, height: 60)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .overlay(
+                                        Button {
+                                            attachedImages.remove(at: index)
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.caption)
+                                                .foregroundStyle(.white)
+                                                .shadow(radius: 2)
+                                        }
+                                        .offset(x: 6, y: -6),
+                                        alignment: .topTrailing
+                                    )
+                            }
+                        }
                     }
                     .padding(.horizontal, 16)
                 }
@@ -554,18 +582,22 @@ struct AgentChatView: View {
                 .buttonStyle(.plain)
                 #endif
 
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 5, matching: .images) {
                     Image(systemName: "photo")
                         .font(.subheadline)
                         .foregroundStyle(Theme.textSecondary)
                         .frame(width: 28, height: 32)
                 }
                 .buttonStyle(.plain)
-                    .onChange(of: selectedPhoto) { _, newItem in
+                    .onChange(of: selectedPhotos) { _, newItems in
                         Task {
-                            if let data = try? await newItem?.loadTransferable(type: Data.self) {
-                                attachedImage = data
+                            var images: [Data] = []
+                            for item in newItems {
+                                if let data = try? await item.loadTransferable(type: Data.self) {
+                                    images.append(data)
+                                }
                             }
+                            attachedImages = images
                         }
                     }
 
@@ -627,11 +659,11 @@ struct AgentChatView: View {
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
                         .background(
-                            (inputText.isEmpty && attachedImage == nil) ? Theme.textTertiary : Theme.primary,
+                            (inputText.isEmpty && attachedImages.isEmpty) ? Theme.textTertiary : Theme.primary,
                             in: RoundedRectangle(cornerRadius: 10)
                         )
                 }
-                .disabled(inputText.isEmpty && attachedImage == nil)
+                .disabled(inputText.isEmpty && attachedImages.isEmpty)
                 .buttonStyle(.plain)
             }
         }
@@ -649,7 +681,7 @@ struct AgentChatView: View {
         #if os(iOS)
         .fullScreenCover(isPresented: $showCamera) {
             CameraView { imageData in
-                attachedImage = imageData
+                attachedImages.append(imageData)
                 showCamera = false
             }
             .ignoresSafeArea()
@@ -661,27 +693,28 @@ struct AgentChatView: View {
 
     private func sendMessage(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasImage = attachedImage != nil
-        guard !trimmed.isEmpty || hasImage else { return }
+        let hasImages = !attachedImages.isEmpty
+        guard !trimmed.isEmpty || hasImages else { return }
 
-        let msgText = trimmed.isEmpty ? "[Photo attached]" : trimmed
-        messages.append(ChatMessage(role: .user, content: msgText, agent: "", timestamp: .now, imageData: attachedImage))
+        let imgCount = attachedImages.count
+        let msgText = trimmed.isEmpty ? "[\(imgCount) photo\(imgCount == 1 ? "" : "s") attached]" : trimmed
+        messages.append(ChatMessage(role: .user, content: msgText, agent: "", timestamp: .now, imageData: attachedImages.first, imageDataArray: hasImages ? attachedImages : nil))
 
-        let imageToSend = attachedImage
+        let imagesToSend = attachedImages
         inputText = ""
-        attachedImage = nil
-        selectedPhoto = nil
+        attachedImages = []
+        selectedPhotos = []
         isTyping = true
         startTypingAnimation()
 
         Task {
             if backendOnline {
-                await sendToBackend(msgText, image: imageToSend)
+                await sendToBackend(msgText, images: imagesToSend)
             } else {
                 let online = await agentClient.healthCheck()
                 await MainActor.run { backendOnline = online }
                 if online {
-                    await sendToBackend(msgText, image: imageToSend)
+                    await sendToBackend(msgText, images: imagesToSend)
                 } else {
                     try? await Task.sleep(for: .seconds(Double.random(in: 1.5...3.0)))
                     await MainActor.run {
@@ -739,6 +772,19 @@ struct AgentChatView: View {
             ctx.append("Recent meals:\n" + meals.joined(separator: "\n"))
         }
 
+        // Medications
+        if !todayMedications.isEmpty {
+            let medLines = todayMedications.map { med in
+                let doseStatus = med.doses.map { dose in
+                    let time = dose.scheduledTime ?? "unscheduled"
+                    let status = dose.status ?? "pending"
+                    return "\(time): \(status)"
+                }.joined(separator: ", ")
+                return "\(med.name) \(med.dosage) (\(med.category)) - \(doseStatus.isEmpty ? "no doses today" : doseStatus)"
+            }
+            ctx.append("Today's medications:\n" + medLines.joined(separator: "\n"))
+        }
+
         // Pump data
         let boluses = MockData.bolusData().prefix(5)
         if !boluses.isEmpty {
@@ -753,25 +799,29 @@ struct AgentChatView: View {
         return ctx.joined(separator: "\n\n")
     }
 
-    private func sendToBackend(_ text: String, image: Data? = nil) async {
+    private func sendToBackend(_ text: String, images: [Data] = []) async {
         let agentMap = [
             "islet1": "orchestrator",
             "cgm": "cgm",
             "pump": "pump",
             "nutrition": "nutrition",
             "supply": "supply",
+            "medication": "medication",
             "research": "deep_research"
         ]
         let backendAgent = agentMap[selectedAgent.id] ?? "orchestrator"
         let context = buildContext()
 
-        // Use non-streaming when image attached (pending actions are more reliable)
+        // Use non-streaming when images attached (pending actions are more reliable)
         // or when the agent is nutrition/supply (needs pending actions for HealthKit/DB writes)
-        let needsActions = image != nil || backendAgent == "nutrition" || backendAgent == "supply"
+        let needsActions = !images.isEmpty || backendAgent == "nutrition" || backendAgent == "supply" || backendAgent == "medication"
+        // Send first image via existing API field, additional images via images_base64 array
+        let firstImage = images.first
+        let allImageB64 = images.map { $0.base64EncodedString() }
         if useStreaming && !needsActions {
-            await streamFromBackend(text, agent: backendAgent, context: context, image: image)
+            await streamFromBackend(text, agent: backendAgent, context: context, image: firstImage)
         } else {
-            await fetchFromBackend(text, agent: backendAgent, context: context, image: image)
+            await fetchFromBackend(text, agent: backendAgent, context: context, image: firstImage, imagesBase64: allImageB64.count > 1 ? allImageB64 : nil)
         }
     }
 
@@ -827,19 +877,21 @@ struct AgentChatView: View {
                 }
             }
             await MainActor.run { isTyping = false }
+            await fetchSessions()
         } catch {
             // Fall back to non-streaming
             await fetchFromBackend(text, agent: agent, context: context)
         }
     }
 
-    private func fetchFromBackend(_ text: String, agent: String, context: String, image: Data? = nil) async {
+    private func fetchFromBackend(_ text: String, agent: String, context: String, image: Data? = nil, imagesBase64: [String]? = nil) async {
         do {
             let response = try await agentClient.sendMessage(
                 message: text,
                 agent: agent,
                 sessionId: sessionId,
                 context: context,
+                imagesBase64: imagesBase64,
                 imageBase64: image?.base64EncodedString()
             )
 
@@ -901,6 +953,34 @@ struct AgentChatView: View {
                 let fat = data.double("fat_g") ?? 0
                 await hk.logMeal(name: name, calories: cals, carbs: carbs, protein: protein, fat: fat)
                 print("HealthKit: logged \(name) - \(carbs)g carbs via pending_action")
+
+            case "log_medication_dose":
+                guard let medClient = medicationClient else { continue }
+                let medId = Int(data.double("medication_id") ?? 0)
+                let scheduledTime = data.string("scheduled_time")
+                let status = data.string("status") ?? "taken"
+                let success = await medClient.logDose(medicationId: medId, scheduledTime: scheduledTime, status: status)
+                if success {
+                    let meds = await medClient.fetchTodaySchedule()
+                    await MainActor.run { todayMedications = meds }
+                }
+                print("Medication: logged dose for ID \(medId) status=\(status) success=\(success)")
+
+            case "add_medication":
+                guard let medClient = medicationClient else { continue }
+                let name = data.string("name") ?? ""
+                let dosage = data.string("dosage") ?? ""
+                let category = data.string("category") ?? "other"
+                let frequency = data.string("frequency") ?? "daily"
+                let notes = data.string("notes") ?? ""
+                let timesStr = data.string("schedule_times") ?? "08:00"
+                let scheduleTimes = timesStr.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                let success = await medClient.createMedication(name: name, dosage: dosage, category: category, frequency: frequency, scheduleTimes: scheduleTimes, notes: notes)
+                if success {
+                    let meds = await medClient.fetchTodaySchedule()
+                    await MainActor.run { todayMedications = meds }
+                }
+                print("Medication: added \(name) \(dosage) success=\(success)")
 
             default:
                 print("Unknown pending action: \(type)")
@@ -1084,7 +1164,22 @@ struct MessageBubble: View {
             Spacer(minLength: 50)
             VStack(alignment: .trailing, spacing: 4) {
                 #if os(iOS)
-                if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
+                if let images = message.imageDataArray, images.count > 1 {
+                    // Multiple images
+                    let columns = images.count <= 2 ? 2 : 3
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: columns), spacing: 4) {
+                        ForEach(Array(images.enumerated()), id: \.offset) { _, imgData in
+                            if let uiImage = UIImage(data: imgData) {
+                                Image(uiImage: uiImage)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(height: images.count <= 2 ? 120 : 80)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 240)
+                } else if let imgData = message.imageData, let uiImage = UIImage(data: imgData) {
                     Image(uiImage: uiImage)
                         .resizable()
                         .scaledToFill()

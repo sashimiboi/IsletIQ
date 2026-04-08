@@ -6,15 +6,30 @@ struct NutritionView: View {
     @State private var showStepsDetail = false
     @State private var showCaloriesDetail = false
     @State private var isLoading = false
+    @State private var todayMeds: [TodayMedication] = []
+    @State private var showAddMed = false
+    @State private var showMedList = false
+    @State private var selectedDate: Date = .now
+    private let medClient = MedicationClient()
+
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(selectedDate)
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
+                // Date selector
+                dateStrip
+
                 // Sleep
                 sleepCard
 
                 // Activity
                 activityCard
+
+                // Medications
+                medicationsCard
 
                 // Today's nutrition
                 todaySummary
@@ -50,11 +65,20 @@ struct NutritionView: View {
                 LogMealView(healthKit: hk)
             }
         }
+        .sheet(isPresented: $showAddMed) {
+            AddMedicationView(onSave: { Task { todayMeds = await medClient.fetchTodaySchedule() } })
+        }
+        .navigationDestination(isPresented: $showMedList) {
+            MedicationListView()
+        }
         .task {
-            await healthKit?.fetchAll()
+            await loadData()
         }
         .refreshable {
-            await healthKit?.fetchAll()
+            await loadData()
+        }
+        .onChange(of: selectedDate) {
+            Task { await loadData() }
         }
     }
 
@@ -201,10 +225,94 @@ struct NutritionView: View {
         }
     }
 
+    // MARK: - Medications Card
+
+    private var medicationsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "pills.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.primary)
+                Text("Medications")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+
+                let totalSlots = todayMeds.reduce(0) { $0 + $1.totalSlots }
+                let takenSlots = todayMeds.reduce(0) { $0 + $1.takenCount }
+                if totalSlots > 0 {
+                    Text("\(takenSlots)/\(totalSlots)")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(takenSlots == totalSlots ? .green : Theme.primary)
+                }
+
+                Button { showMedList = true } label: {
+                    Image(systemName: "list.bullet")
+                        .font(.caption)
+                        .foregroundStyle(Theme.primary)
+                }
+                Button { showAddMed = true } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.primary)
+                }
+            }
+
+            if todayMeds.isEmpty {
+                Text("No medications — tap + to add")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textTertiary)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(todayMeds) { med in
+                    ForEach(med.scheduleTimes, id: \.self) { time in
+                        let taken = med.isDoseTaken(at: time)
+                        HStack(spacing: 10) {
+                            Button {
+                                if !taken {
+                                    Task {
+                                        _ = await medClient.logDose(medicationId: med.id, scheduledTime: time)
+                                        todayMeds = await medClient.fetchTodaySchedule()
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: taken ? "checkmark.circle.fill" : "circle")
+                                    .font(.body)
+                                    .foregroundStyle(taken ? .green : Theme.textTertiary)
+                            }
+                            .buttonStyle(.plain)
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(med.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(taken ? Theme.textTertiary : Theme.textPrimary)
+                                    .strikethrough(taken)
+                                if !med.dosage.isEmpty {
+                                    Text(med.dosage)
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                            }
+
+                            Spacer()
+
+                            Text(time)
+                                .font(.caption.weight(.medium).monospacedDigit())
+                                .foregroundStyle(Theme.textSecondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .card()
+    }
+
     // MARK: - Today Summary
 
     private var todayMeals: [HealthKitManager.MealEntry] {
-        healthKit?.recentMeals.filter { Calendar.current.isDateInToday($0.date) } ?? []
+        healthKit?.recentMeals.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDate) } ?? []
     }
 
     private var todaySummary: some View {
@@ -214,7 +322,7 @@ struct NutritionView: View {
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Today")
+                Text(isToday ? "Today" : selectedDate.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
@@ -322,6 +430,49 @@ struct NutritionView: View {
     private func logQuick(_ name: String, carbs: Double, cals: Double, protein: Double = 0, fat: Double = 0) async {
         await healthKit?.logMeal(name: name, calories: cals, carbs: carbs, protein: protein, fat: fat)
         await healthKit?.fetchAll()
+    }
+
+    // MARK: - Date Strip
+
+    private var dateStrip: some View {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        let days = (-6...0).map { calendar.date(byAdding: .day, value: $0, to: today)! }
+
+        return HStack(spacing: 6) {
+            ForEach(days, id: \.self) { day in
+                let isSelected = calendar.isDate(day, inSameDayAs: selectedDate)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { selectedDate = day }
+                } label: {
+                    VStack(spacing: 4) {
+                        Text(day.formatted(.dateTime.weekday(.short)))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(isSelected ? .white : Theme.textTertiary)
+                        Text(day.formatted(.dateTime.day()))
+                            .font(.system(size: 14, weight: isSelected ? .bold : .medium).monospacedDigit())
+                            .foregroundStyle(isSelected ? .white : Theme.textPrimary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(
+                        isSelected ? Theme.primary : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 10)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 6)
+        .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func loadData() async {
+        async let health: () = healthKit?.fetchAll(for: selectedDate) ?? ()
+        async let meds = medClient.fetchTodaySchedule()
+        _ = await health
+        todayMeds = await meds
     }
 
     private var carbReferenceCard: some View {

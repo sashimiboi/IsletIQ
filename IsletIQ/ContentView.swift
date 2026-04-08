@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import HealthKit
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -19,6 +20,7 @@ struct ContentView: View {
     @State private var notifications = NotificationManager()
     @State private var isAuthenticated = APIConfig.authToken != nil
     private let watchSync = WatchSyncManager.shared
+    private let medicationClient = MedicationClient()
 
     var body: some View {
         if !isAuthenticated {
@@ -73,7 +75,7 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit)
+                AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit, medicationClient: medicationClient)
             }
             .tabItem {
                 Label("Agent", systemImage: "sparkles")
@@ -113,17 +115,31 @@ struct ContentView: View {
             } else {
                 syncToWatch()
             }
-            // Push sleep and meals after HealthKit loads
+            // Push sleep, meals, pump after HealthKit is ready
             Task {
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(3))
+                await healthKit.requestAuthorization()
+                await healthKit.fetchAll()
                 await pushSleepToBackend()
                 await pushMealsToBackend()
                 await pushPumpToBackend()
             }
-            // Notifications
+            // Re-push meals/pump every 2 minutes so mid-session logs reach the watch
+            Task {
+                try? await Task.sleep(for: .seconds(120))
+                while !Task.isCancelled {
+                    await healthKit.fetchRecentMeals()
+                    await pushMealsToBackend()
+                    await pushPumpToBackend()
+                    try? await Task.sleep(for: .seconds(120))
+                }
+            }
+            // Notifications + medication reminders
             Task {
                 await notifications.requestAuthorization()
                 notifications.scheduleMealReminders()
+                let meds = await MedicationClient().fetchMedications()
+                notifications.scheduleMedicationReminders(meds)
             }
         }
         // Check glucose for alerts + sync to watch when readings update
@@ -242,8 +258,66 @@ struct ContentView: View {
     }
 
     private func pushPumpToBackend() async {
-        // TODO: Replace with real pump integration (e.g., Loop, Omnipod SDK)
-        // Skipping push — no real pump data source connected yet.
+        guard let insulinType = HKQuantityType.quantityType(forIdentifier: .insulinDelivery) else { return }
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/pump/push") else { return }
+
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: insulinType,
+                predicate: predicate,
+                limit: 50,
+                sortDescriptors: [sortDesc]
+            ) { _, results, _ in
+                continuation.resume(returning: (results as? [HKQuantitySample]) ?? [])
+            }
+            healthKit.store.execute(query)
+        }
+
+        guard !samples.isEmpty else { return }
+
+        // Separate basal vs bolus
+        var totalBasal = 0.0
+        var boluses: [[String: Any]] = []
+        var lastBolusUnits = 0.0
+
+        for sample in samples {
+            let units = sample.quantity.doubleValue(for: .internationalUnit())
+            let reason = sample.metadata?[HKMetadataKeyInsulinDeliveryReason] as? Int
+            if reason == HKInsulinDeliveryReason.basal.rawValue {
+                totalBasal += units
+            } else {
+                if boluses.isEmpty { lastBolusUnits = units }
+                boluses.append([
+                    "units": units,
+                    "carbs": 0,
+                    "timestamp": sample.startDate.timeIntervalSince1970
+                ])
+            }
+        }
+
+        // Estimate hourly basal rate from today's total basal delivery
+        let hoursElapsed = max(1, Date().timeIntervalSince(startOfDay) / 3600.0)
+        let basalRate = totalBasal / hoursElapsed
+
+        let body: [String: Any] = [
+            "model": "Omnipod 5",
+            "basalRate": round(basalRate * 100) / 100,
+            "lastBolus": lastBolusUnits,
+            "reservoir": 200.0 - totalBasal - boluses.reduce(0.0) { $0 + ($1["units"] as? Double ?? 0) },
+            "battery": 100,
+            "recentBoluses": Array(boluses.prefix(5))
+        ]
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        APIConfig.applyAuth(to: &request)
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: request)
     }
 
     private func pushMealsToBackend() async {
@@ -312,7 +386,7 @@ struct ContentView: View {
                     Label("Pump", systemImage: "cross.vial.fill")
                 }
                 NavigationLink {
-                    AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit)
+                    AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit, medicationClient: medicationClient)
                 } label: {
                     Label("Agent", systemImage: "brain.head.profile.fill")
                 }

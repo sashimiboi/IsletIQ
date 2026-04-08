@@ -50,7 +50,7 @@ final class HealthKitManager {
     var recentMeals: [MealEntry] = []
 
     struct MealEntry: Identifiable {
-        let id = UUID()
+        let id: UUID
         let name: String
         let carbs: Double
         let calories: Double
@@ -157,8 +157,6 @@ final class HealthKitManager {
         do {
             try await store.save(samples)
             print("HealthKit: logged \(name) - \(carbs)g carbs, \(calories) kcal")
-            // Refresh meals list
-            await fetchRecentMeals()
             await fetchRecentMeals()
         } catch {
             print("HealthKit save failed: \(error)")
@@ -206,11 +204,12 @@ final class HealthKitManager {
 
     // MARK: - Fetch Recent Meals (query carbs directly, not food correlations)
 
-    func fetchRecentMeals() async {
+    func fetchRecentMeals(for date: Date = .now) async {
         guard let carbType = HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates),
               let calType = HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed) else { return }
-        let startDate = Calendar.current.date(byAdding: .day, value: -7, to: .now)!
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: .now, options: .strictStartDate)
+        let startDate = Calendar.current.date(byAdding: .day, value: -7, to: date)!
+        let endDate: Date = Calendar.current.isDateInToday(date) ? .now : Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: date))!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
 
         // Fetch calorie samples first to build a lookup by timestamp
@@ -253,11 +252,21 @@ final class HealthKitManager {
                         abs(cal.date.timeIntervalSince(sample.startDate)) < 2 &&
                         (cal.name == name || cal.name.isEmpty || name == "Meal")
                     }?.cals ?? 0
-                    return MealEntry(name: name, carbs: carbs, calories: matchedCals, date: sample.startDate, sample: sample)
+                    return MealEntry(id: sample.uuid, name: name, carbs: carbs, calories: matchedCals, date: sample.startDate, sample: sample)
+                }
+
+                // Deduplicate: if two entries share the same name and are within 60s, keep only the first
+                var deduped: [MealEntry] = []
+                for meal in meals {
+                    let isDupe = deduped.contains { existing in
+                        existing.name == meal.name &&
+                        abs(existing.date.timeIntervalSince(meal.date)) < 60
+                    }
+                    if !isDupe { deduped.append(meal) }
                 }
 
                 Task { @MainActor in
-                    self.recentMeals = meals
+                    self.recentMeals = deduped
                     continuation.resume()
                 }
             }
@@ -280,37 +289,51 @@ final class HealthKitManager {
 
     // MARK: - Fetch Sleep
 
-    func fetchLastSleep() async {
+    func fetchLastSleep(for date: Date = .now) async {
         let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
-        let startDate = Calendar.current.date(byAdding: .day, value: -2, to: .now)!
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: .now, options: .strictStartDate)
+        // Look back 2 days from the target date to capture overnight sleep sessions
+        let startDate = Calendar.current.date(byAdding: .day, value: -2, to: date)!
+        let endDate: Date = Calendar.current.isDateInToday(date) ? .now : Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: date))!
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
         let sortDescriptor = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let query = HKSampleQuery(
                 sampleType: sleepType,
                 predicate: predicate,
-                limit: 100,
+                limit: 200,
                 sortDescriptors: [sortDescriptor]
             ) { _, samples, _ in
                 guard let samples = samples as? [HKCategorySample], !samples.isEmpty else {
+                    Task { @MainActor in self.lastSleep = nil }
                     continuation.resume()
                     return
                 }
 
-                // Group samples into sleep sessions based on time gaps
-                // A gap of > 60 min between samples means a new session
-                let sorted = samples.sorted { $0.startDate < $1.startDate }
+                // Prefer a single source for consistency (SleepWatch > Apple Watch > any)
+                // Group samples by source bundle ID and pick the one with the most data
+                var bySource: [String: [HKCategorySample]] = [:]
+                for s in samples {
+                    let src = s.sourceRevision.source.bundleIdentifier
+                    bySource[src, default: []].append(s)
+                }
+                // Prefer SleepWatch if present, else pick source with most samples
+                let preferred = bySource.first(where: { $0.key.contains("sleepwatch") || $0.key.contains("SleepWatch") })?.value
+                    ?? bySource.max(by: { $0.value.count < $1.value.count })?.value
+                    ?? Array(samples)
+
+                // Filter to sleep stage samples (skip inBed)
+                let sleepSamples = preferred.filter { $0.value != HKCategoryValueSleepAnalysis.inBed.rawValue }
+                    .sorted { $0.startDate < $1.startDate }
+
+                // Group into sessions based on time gaps > 1 hour
                 var sessions: [[HKCategorySample]] = []
                 var currentSession: [HKCategorySample] = []
 
-                for sample in sorted {
-                    // Skip "inBed" samples, only use actual sleep stages
-                    guard sample.value != HKCategoryValueSleepAnalysis.inBed.rawValue else { continue }
-
+                for sample in sleepSamples {
                     if let last = currentSession.last {
                         let gap = sample.startDate.timeIntervalSince(last.endDate)
-                        if gap > 3600 { // > 1 hour gap = new session
+                        if gap > 3600 {
                             if !currentSession.isEmpty { sessions.append(currentSession) }
                             currentSession = [sample]
                         } else {
@@ -322,16 +345,32 @@ final class HealthKitManager {
                 }
                 if !currentSession.isEmpty { sessions.append(currentSession) }
 
-                // Find the most recent session that's at least 2 hours (ignore short naps)
+                // Find the most recent session >= 2 hours
                 guard let nightSession = sessions.last(where: { session in
                     let totalMin = session.reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) / 60.0 }
                     return totalMin >= 120
                 }) ?? sessions.last else {
+                    Task { @MainActor in self.lastSleep = nil }
                     continuation.resume()
                     return
                 }
 
-                // Process only the selected session
+                // Deduplicate overlapping time ranges (multiple sources can write the same period)
+                // Walk through sorted segments and merge/skip overlaps
+                var merged: [(value: Int, start: Date, end: Date)] = []
+                for sample in nightSession {
+                    let start = sample.startDate
+                    let end = sample.endDate
+                    if let last = merged.last, start < last.end {
+                        // Overlapping — skip if fully covered, trim if partial
+                        if end <= last.end { continue }
+                        merged.append((value: sample.value, start: last.end, end: end))
+                    } else {
+                        merged.append((value: sample.value, start: start, end: end))
+                    }
+                }
+
+                // Process deduplicated segments
                 var totalSleep = 0.0
                 var deep = 0.0
                 var rem = 0.0
@@ -341,33 +380,39 @@ final class HealthKitManager {
                 var latest = Date.distantPast
                 var segments: [SleepSegment] = []
 
-                for sample in nightSession {
-                    let duration = sample.endDate.timeIntervalSince(sample.startDate) / 60.0
-                    if sample.startDate < earliest { earliest = sample.startDate }
-                    if sample.endDate > latest { latest = sample.endDate }
+                for seg in merged {
+                    let duration = seg.end.timeIntervalSince(seg.start) / 60.0
+                    if seg.start < earliest { earliest = seg.start }
+                    if seg.end > latest { latest = seg.end }
 
-                    switch sample.value {
+                    switch seg.value {
                     case HKCategoryValueSleepAnalysis.asleepDeep.rawValue:
                         deep += duration; totalSleep += duration
-                        segments.append(SleepSegment(stage: .deep, start: sample.startDate, end: sample.endDate))
+                        segments.append(SleepSegment(stage: .deep, start: seg.start, end: seg.end))
                     case HKCategoryValueSleepAnalysis.asleepREM.rawValue:
                         rem += duration; totalSleep += duration
-                        segments.append(SleepSegment(stage: .rem, start: sample.startDate, end: sample.endDate))
+                        segments.append(SleepSegment(stage: .rem, start: seg.start, end: seg.end))
                     case HKCategoryValueSleepAnalysis.asleepCore.rawValue:
                         core += duration; totalSleep += duration
-                        segments.append(SleepSegment(stage: .core, start: sample.startDate, end: sample.endDate))
+                        segments.append(SleepSegment(stage: .core, start: seg.start, end: seg.end))
                     case HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue:
                         core += duration; totalSleep += duration
-                        segments.append(SleepSegment(stage: .core, start: sample.startDate, end: sample.endDate))
+                        segments.append(SleepSegment(stage: .core, start: seg.start, end: seg.end))
                     case HKCategoryValueSleepAnalysis.awake.rawValue:
                         awake += duration
-                        segments.append(SleepSegment(stage: .awake, start: sample.startDate, end: sample.endDate))
+                        segments.append(SleepSegment(stage: .awake, start: seg.start, end: seg.end))
                     default:
                         break
                     }
                 }
 
-                if totalSleep > 0 {
+                // Only show sleep if wake time falls on the selected date
+                // (sleep from 11pm Mon → 7am Tue belongs to Tuesday)
+                let wakeOnSelectedDay = Calendar.current.isDate(latest, inSameDayAs: date)
+                // For today, also accept sleep that ended within the last 12 hours
+                let isRecent = Calendar.current.isDateInToday(date) && abs(latest.timeIntervalSinceNow) < 43200
+
+                if totalSleep > 0 && (wakeOnSelectedDay || isRecent) {
                     let sleep = SleepData(
                         bedtime: earliest,
                         wakeTime: latest,
@@ -383,7 +428,10 @@ final class HealthKitManager {
                         continuation.resume()
                     }
                 } else {
-                    continuation.resume()
+                    Task { @MainActor in
+                        self.lastSleep = nil
+                        continuation.resume()
+                    }
                 }
             }
             store.execute(query)
@@ -392,9 +440,10 @@ final class HealthKitManager {
 
     // MARK: - Fetch Steps & Active Calories
 
-    func fetchActivityToday() async {
-        let startOfDay = Calendar.current.startOfDay(for: .now)
-        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: .now, options: .strictStartDate)
+    func fetchActivityToday(for date: Date = .now) async {
+        let startOfDay = Calendar.current.startOfDay(for: date)
+        let endDate: Date = Calendar.current.isDateInToday(date) ? .now : Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: endDate, options: .strictStartDate)
 
         // Steps
         if let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) {
@@ -547,10 +596,10 @@ final class HealthKitManager {
 
     // MARK: - Fetch All Health Data
 
-    func fetchAll() async {
-        await fetchRecentMeals()
-        await fetchLastSleep()
-        await fetchActivityToday()
+    func fetchAll(for date: Date = .now) async {
+        await fetchRecentMeals(for: date)
+        await fetchLastSleep(for: date)
+        await fetchActivityToday(for: date)
     }
 
     // MARK: - Observe New Food Entries

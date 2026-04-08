@@ -49,7 +49,7 @@ actor SupplyClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
     }
 
@@ -60,7 +60,7 @@ actor SupplyClient {
         APIConfig.applyAuth(to: &request)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
     }
 
@@ -74,7 +74,7 @@ actor SupplyClient {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
     }
 
@@ -85,7 +85,7 @@ actor SupplyClient {
         APIConfig.applyAuth(to: &request)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
     }
 
@@ -93,7 +93,7 @@ actor SupplyClient {
         guard let url = URL(string: "\(baseURL)/health") else { return false }
         do {
             let (_, response) = try await URLSession.shared.data(from: url)
-            return (response as? HTTPURLResponse)?.statusCode == 200
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
     }
 }
