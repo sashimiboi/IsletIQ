@@ -88,6 +88,18 @@ struct LibreLinkLoginView: View {
                 .disabled(email.isEmpty || password.isEmpty || isLoading)
                 .padding(.horizontal, 24)
 
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.caption)
+                        .foregroundStyle(Theme.primary)
+                        .padding(.top, 2)
+                    Text("By connecting, you consent to IsletIQ accessing your LibreLink CGM readings. Credentials are stored in your device's Keychain.")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .padding(12)
+                .padding(.horizontal, 12)
+
                 Spacer()
             }
             .background(Theme.bg)

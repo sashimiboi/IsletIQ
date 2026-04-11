@@ -121,18 +121,28 @@ struct DexcomLoginView: View {
                     .disabled(username.isEmpty || password.isEmpty || dexcomManager.isLoading)
                     .buttonStyle(.plain)
 
+                    // Data consent notice
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "lock.shield.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.primary)
+                            .padding(.top, 2)
+                        Text("By connecting, you consent to IsletIQ accessing your Dexcom CGM readings. Your credentials are stored securely in your device's Keychain and are never shared with third parties. CGM data is sent to IsletIQ's servers to power the AI assistant.")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .padding(12)
+                    .background(Theme.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+
                     // Info
                     VStack(spacing: 6) {
                         Text("Requirements")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(Theme.textSecondary)
-                        Text("• Share must be enabled in your Dexcom G7 app")
+                        Text("Share must be enabled in your Dexcom G7 app")
                             .font(.caption2)
                             .foregroundStyle(Theme.textTertiary)
-                        Text("• At least one follower must be added")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.textTertiary)
-                        Text("• Credentials are stored securely in your Keychain")
+                        Text("At least one follower must be added")
                             .font(.caption2)
                             .foregroundStyle(Theme.textTertiary)
                     }

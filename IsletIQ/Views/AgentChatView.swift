@@ -571,25 +571,25 @@ struct AgentChatView: View {
                 #endif
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                // Camera + Photo buttons (side by side)
+            HStack(alignment: .bottom, spacing: 6) {
+                // Camera + Photo
                 #if os(iOS)
-                Button { showCamera = true } label: {
-                    Image(systemName: "camera")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 28, height: 32)
-                }
-                .buttonStyle(.plain)
-                #endif
+                HStack(spacing: 2) {
+                    Button { showCamera = true } label: {
+                        Image(systemName: "camera")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(width: 30, height: 36)
+                    }
+                    .buttonStyle(.plain)
 
-                PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 5, matching: .images) {
-                    Image(systemName: "photo")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.textSecondary)
-                        .frame(width: 28, height: 32)
-                }
-                .buttonStyle(.plain)
+                    PhotosPicker(selection: $selectedPhotos, maxSelectionCount: 5, matching: .images) {
+                        Image(systemName: "photo")
+                            .font(.system(size: 15))
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(width: 30, height: 36)
+                    }
+                    .buttonStyle(.plain)
                     .onChange(of: selectedPhotos) { _, newItems in
                         Task {
                             var images: [Data] = []
@@ -601,9 +601,11 @@ struct AgentChatView: View {
                             attachedImages = images
                         }
                     }
+                }
+                #endif
 
-                // Text input with mic inside
-                HStack(alignment: .bottom, spacing: 0) {
+                // Text input
+                HStack(alignment: .bottom, spacing: 4) {
                     TextField("Ask \(selectedAgent.name) anything...", text: $inputText, axis: .vertical)
                         .font(.subheadline)
                         .lineLimit(6)
@@ -612,48 +614,37 @@ struct AgentChatView: View {
                         .padding(.vertical, 8)
 
                     #if os(iOS)
-                    // Inline dictation (mic)
+                    // Mic for inline dictation
                     Button { startVoiceInput() } label: {
-                        Image(systemName: isRecording ? "stop.fill" : "mic")
-                            .font(isRecording ? .caption : .subheadline)
-                            .foregroundStyle(isRecording ? .white : Theme.textTertiary)
-                            .frame(width: 28, height: 28)
-                            .background(isRecording ? Theme.high : .clear, in: Circle())
+                        Image(systemName: isRecording ? "stop.circle.fill" : "mic.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(isRecording ? Theme.high : Theme.textTertiary)
+                            .frame(width: 30, height: 30)
                     }
                     .buttonStyle(.plain)
+                    .padding(.trailing, 2)
+                    .padding(.bottom, 3)
                     #endif
                 }
-                .padding(.trailing, 4)
                 .background(Theme.muted, in: RoundedRectangle(cornerRadius: 16))
-
-                // Recording indicator
-                if isRecording {
-                    HStack(spacing: 4) {
-                        Circle().fill(Theme.high).frame(width: 6, height: 6)
-                        Text("Listening...")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(Theme.high)
-                    }
-                    .transition(.opacity)
-                }
 
                 #if os(iOS)
                 // Voice mode
                 Button { showVoiceMode = true } label: {
                     Image(systemName: "waveform.circle.fill")
-                        .font(.title2)
+                        .font(.system(size: 28))
                         .foregroundStyle(Theme.primary)
                         .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
                 #endif
 
-                // Send (aligned to bottom)
+                // Send
                 Button {
                     sendMessage(inputText)
                 } label: {
                     Image(systemName: "paperplane.fill")
-                        .font(.subheadline)
+                        .font(.system(size: 14))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
                         .background(

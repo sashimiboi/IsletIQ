@@ -148,7 +148,13 @@ struct DataConsentPage: View {
                         .foregroundStyle(Theme.textSecondary)
                         .padding(.horizontal, 4)
 
-                    VStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Required Services")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
+
                         dataCard(
                             title: "IsletIQ Cloud",
                             icon: "cloud.fill",
@@ -162,22 +168,32 @@ struct DataConsentPage: View {
                             purpose: "Generates personalized diabetes insights and answers"
                         )
                         dataCard(
-                            title: "ElevenLabs (Voice)",
-                            icon: "waveform",
-                            data: "AI assistant responses (text only, not your voice)",
-                            purpose: "Converts agent responses to natural speech in voice mode"
-                        )
-                        dataCard(
-                            title: "Dexcom / LibreLink",
-                            icon: "waveform.path.ecg",
-                            data: "Account credentials (stored securely in Keychain)",
-                            purpose: "Fetches your CGM glucose readings"
-                        )
-                        dataCard(
                             title: "Apple HealthKit",
                             icon: "heart.fill",
                             data: "Glucose, insulin, meals, sleep, activity",
                             purpose: "Reads and writes health data to Apple Health"
+                        )
+                    }
+                    .padding(.horizontal, 4)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Optional (consent requested when enabled)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Theme.textTertiary)
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
+
+                        dataCard(
+                            title: "ElevenLabs (Voice Mode)",
+                            icon: "waveform",
+                            data: "AI responses (text only, not your voice recordings)",
+                            purpose: "Converts agent responses to natural speech"
+                        )
+                        dataCard(
+                            title: "Dexcom / LibreLink / Nightscout / Tidepool",
+                            icon: "waveform.path.ecg",
+                            data: "Account credentials (stored in Keychain)",
+                            purpose: "Fetches your CGM glucose readings"
                         )
                     }
                     .padding(.horizontal, 4)
