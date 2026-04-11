@@ -200,7 +200,7 @@ struct VoiceSessionView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     private func voiceRow(_ voice: VoiceOption) -> some View {
