@@ -44,8 +44,6 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
     // MARK: - TTS
 
     private var ttsTask: Task<Void, Never>?
-    private var sentenceBuffer = ""
-    private var sentenceQueue: [String] = []
     private var isPlayingAudio = false
     private var lastUserMessage = ""
 
@@ -85,8 +83,6 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         audioPlayer = nil
         levelTimer?.invalidate()
         levelTimer = nil
-        sentenceQueue.removeAll()
-        sentenceBuffer = ""
         isPlayingAudio = false
         if !lastUserMessage.isEmpty && !responseText.isEmpty {
             onExchange?(lastUserMessage, responseText)
@@ -209,8 +205,6 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         guard let client = agentClient else { return }
 
         responseText = ""
-        sentenceBuffer = ""
-        sentenceQueue.removeAll()
 
         ttsTask = Task { [weak self] in
             guard let self else { return }
@@ -234,10 +228,9 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
                         switch event.type {
                         case "text_delta":
                             self.responseText += event.content
-                            self.bufferForTTS(event.content)
                         case "done":
                             if let sid = event.sessionId { self.sessionId = sid }
-                            self.flushTTSBuffer()
+                            self.speakFullResponse()
                         case "error":
                             self.errorMessage = "Agent error"
                             self.startListening()
@@ -259,60 +252,25 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - TTS Sentence Chunking
+    // MARK: - TTS
 
-    private func bufferForTTS(_ text: String) {
-        sentenceBuffer += text
-
-        let terminators: [Character] = [".", "!", "?"]
-        while let idx = sentenceBuffer.lastIndex(where: { terminators.contains($0) }) {
-            let afterIdx = sentenceBuffer.index(after: idx)
-            if afterIdx == sentenceBuffer.endIndex || sentenceBuffer[afterIdx] == " " {
-                let sentence = String(sentenceBuffer[...idx]).trimmingCharacters(in: .whitespacesAndNewlines)
-                sentenceBuffer = String(sentenceBuffer[afterIdx...]).trimmingCharacters(in: .whitespaces)
-                if !sentence.isEmpty {
-                    sentenceQueue.append(sentence)
-                    if !isPlayingAudio {
-                        playNextSentence()
-                    }
-                }
-                break
-            } else {
-                break
-            }
-        }
-    }
-
-    private func flushTTSBuffer() {
-        let remaining = sentenceBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        sentenceBuffer = ""
-        if !remaining.isEmpty {
-            sentenceQueue.append(remaining)
-        }
-        if !isPlayingAudio && !sentenceQueue.isEmpty {
-            playNextSentence()
-        } else if !isPlayingAudio && sentenceQueue.isEmpty {
-            onAllAudioComplete()
-        }
-    }
-
-    // MARK: - TTS Playback (MP3 via AVAudioPlayer)
-
-    private func playNextSentence() {
-        guard !sentenceQueue.isEmpty else {
-            isPlayingAudio = false
+    private func speakFullResponse() {
+        let text = stripMarkdown(responseText).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
             onAllAudioComplete()
             return
         }
 
-        let sentence = sentenceQueue.removeFirst()
-        isPlayingAudio = true
         state = .speaking
+        isPlayingAudio = true
 
         Task { [weak self] in
             guard let self else { return }
             do {
-                let mp3Data = try await self.ttsClient.synthesize(text: sentence)
+                // Cap at 2000 chars for TTS (ElevenLabs limit considerations)
+                let ttsText = String(text.prefix(2000))
+                print("[VoiceSession] TTS: \(ttsText.count) chars")
+                let mp3Data = try await self.ttsClient.synthesize(text: ttsText)
                 if Task.isCancelled { return }
 
                 await MainActor.run { [weak self] in
@@ -321,16 +279,28 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
             } catch {
                 print("[VoiceSession] TTS error: \(error)")
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
-                    self.isPlayingAudio = false
-                    if !self.sentenceQueue.isEmpty {
-                        self.playNextSentence()
-                    } else {
-                        self.onAllAudioComplete()
-                    }
+                    self?.isPlayingAudio = false
+                    self?.onAllAudioComplete()
                 }
             }
         }
+    }
+
+    private func stripMarkdown(_ text: String) -> String {
+        var result = text
+        // Remove bold/italic markers
+        result = result.replacingOccurrences(of: "**", with: "")
+        result = result.replacingOccurrences(of: "__", with: "")
+        result = result.replacingOccurrences(of: "*", with: "")
+        // Remove headers
+        result = result.replacingOccurrences(of: "### ", with: "")
+        result = result.replacingOccurrences(of: "## ", with: "")
+        result = result.replacingOccurrences(of: "# ", with: "")
+        // Remove bullet points
+        result = result.replacingOccurrences(of: "- ", with: "")
+        // Remove code blocks
+        result = result.replacingOccurrences(of: "```", with: "")
+        return result
     }
 
     private func playMP3(data: Data) {
@@ -361,11 +331,7 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         } catch {
             print("[VoiceSession] AVAudioPlayer error: \(error)")
             isPlayingAudio = false
-            if !sentenceQueue.isEmpty {
-                playNextSentence()
-            } else {
-                onAllAudioComplete()
-            }
+            onAllAudioComplete()
         }
     }
 
@@ -376,16 +342,9 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
             self.levelTimer?.invalidate()
             self.levelTimer = nil
             self.audioLevel = 0
+            self.isPlayingAudio = false
             print("[VoiceSession] Playback finished (success=\(flag))")
-
-            if !self.sentenceQueue.isEmpty {
-                self.playNextSentence()
-            } else {
-                self.isPlayingAudio = false
-                if self.sentenceBuffer.isEmpty {
-                    self.onAllAudioComplete()
-                }
-            }
+            self.onAllAudioComplete()
         }
     }
 
@@ -445,8 +404,6 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         levelTimer = nil
         stopRecognition()
         stopEngine()
-        sentenceQueue.removeAll()
-        sentenceBuffer = ""
         isPlayingAudio = false
     }
 }

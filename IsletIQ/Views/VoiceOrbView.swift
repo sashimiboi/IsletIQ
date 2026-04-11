@@ -12,232 +12,103 @@ struct VoiceOrbView: View {
     let state: VoiceState
     let audioLevel: Float
 
-    private let size: CGFloat = 180
+    private let size: CGFloat = 170
 
     var body: some View {
-        TimelineView(.animation) { timeline in
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let level = CGFloat(audioLevel)
 
-            ZStack {
-                // Orbital rings (sci-fi)
-                orbitalRing(t: t, level: level, tilt: 75, speed: 0.3, radius: size * 0.58, opacity: 0.12)
-                orbitalRing(t: t, level: level, tilt: 65, speed: -0.2, radius: size * 0.54, opacity: 0.08)
+            Canvas { context, canvasSize in
+                let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                let r = size / 2
 
-                // Glass sphere shell
-                glassShell
+                // 1. Draw fluid blobs
+                drawFluid(context: &context, center: center, r: r, t: t, level: level)
 
-                // Inner fluid layers
-                ZStack {
-                    fluidBlob(t: t, level: level, phase: 0, color1: Color(red: 0.0, green: 0.08, blue: 0.45), color2: Color(red: 0.0, green: 0.15, blue: 0.6), scaleBase: 0.72, blur: 10)
-                    fluidBlob(t: t, level: level, phase: 1.8, color1: Color(red: 0.0, green: 0.25, blue: 0.75), color2: Color(red: 0.05, green: 0.4, blue: 0.85), scaleBase: 0.58, blur: 8)
-                    fluidBlob(t: t, level: level, phase: 3.5, color1: Color(red: 0.25, green: 0.65, blue: 1.0), color2: Color(red: 0.45, green: 0.8, blue: 1.0), scaleBase: 0.42, blur: 12)
-                    fluidBlob(t: t, level: level, phase: 5.0, color1: .white.opacity(0.35), color2: .white.opacity(0.08), scaleBase: 0.5, blur: 16)
+                // 2. Glass shell ring
+                let shellRect = CGRect(x: center.x - r, y: center.y - r, width: size, height: size)
+                let shellPath = Circle().path(in: shellRect)
+                context.stroke(shellPath, with: .linearGradient(
+                    Gradient(colors: [.white.opacity(0.5), Color(red: 0.7, green: 0.85, blue: 1.0).opacity(0.3), .white.opacity(0.15)]),
+                    startPoint: CGPoint(x: center.x - r, y: center.y - r),
+                    endPoint: CGPoint(x: center.x + r, y: center.y + r)
+                ), lineWidth: 1.5)
 
-                    // Scan line effect
-                    scanLine(t: t)
-                }
-                .clipShape(Circle())
-                .frame(width: size - 6, height: size - 6)
+                // 3. Specular highlight
+                let specRect = CGRect(x: center.x - r * 0.3, y: center.y - r * 0.85, width: r * 0.5, height: r * 0.3)
+                context.fill(Ellipse().path(in: specRect), with: .linearGradient(
+                    Gradient(colors: [.white.opacity(0.4), .white.opacity(0)]),
+                    startPoint: CGPoint(x: specRect.midX, y: specRect.minY),
+                    endPoint: CGPoint(x: specRect.midX, y: specRect.maxY)
+                ))
 
-                // Energy pulse ring
-                energyPulse(t: t, level: level)
-
-                // Glass reflections
-                glassReflections
-
-                // Outer orbital ring (in front)
-                orbitalRing(t: t, level: level, tilt: 80, speed: 0.15, radius: size * 0.56, opacity: 0.15)
-            }
-            .frame(width: size + 40, height: size + 40)
+            } symbols: {}
+                .frame(width: size + 20, height: size + 20)
+                .clipShape(Circle().inset(by: -10))
         }
-        .animation(.easeInOut(duration: 0.4), value: state)
     }
 
-    // MARK: - Fluid Blob
-
-    @ViewBuilder
-    private func fluidBlob(t: Double, level: CGFloat, phase: Double, color1: Color, color2: Color, scaleBase: CGFloat, blur: CGFloat) -> some View {
+    private func drawFluid(context: inout GraphicsContext, center: CGPoint, r: CGFloat, t: Double, level: CGFloat) {
         let speed = fluidSpeed
+
+        // Clip to sphere
+        let clipRect = CGRect(x: center.x - r + 3, y: center.y - r + 3, width: (r - 3) * 2, height: (r - 3) * 2)
+        context.clipToLayer { ctx in
+            ctx.fill(Circle().path(in: clipRect), with: .color(.white))
+        }
+
+        // Blob 1: deep blue, large
+        drawBlob(context: &context, center: center, r: r, t: t, level: level,
+                 phase: 0, scaleBase: 0.75, blur: 18, speed: speed,
+                 color: Color(red: 0.0, green: 0.1, blue: 0.5))
+
+        // Blob 2: mid blue
+        drawBlob(context: &context, center: center, r: r, t: t, level: level,
+                 phase: 2.0, scaleBase: 0.6, blur: 14, speed: speed,
+                 color: Color(red: 0.05, green: 0.3, blue: 0.8))
+
+        // Blob 3: cyan highlight
+        drawBlob(context: &context, center: center, r: r, t: t, level: level,
+                 phase: 4.0, scaleBase: 0.45, blur: 20, speed: speed,
+                 color: Color(red: 0.3, green: 0.65, blue: 1.0).opacity(0.7))
+    }
+
+    private func drawBlob(context: inout GraphicsContext, center: CGPoint, r: CGFloat, t: Double, level: CGFloat, phase: Double, scaleBase: CGFloat, blur: CGFloat, speed: Double, color: Color) {
         let angle = t * speed * 0.5 + phase
-        let dx = sin(angle) * Double(size) * 0.14 * (1.0 + Double(level) * 0.7)
-        let dy = cos(angle * 0.7 + phase) * Double(size) * 0.11
-        let sx = scaleBase + CGFloat(sin(t * speed * 0.8 + phase)) * 0.07 + level * 0.13
-        let sy = scaleBase + CGFloat(cos(t * speed * 0.6 + phase * 1.3)) * 0.05 + level * 0.1
+        let dx = sin(angle) * Double(r) * 0.25 * (1.0 + Double(level) * 0.6)
+        let dy = cos(angle * 0.7 + phase) * Double(r) * 0.2
+        let s = scaleBase + CGFloat(sin(t * speed * 0.7 + phase)) * 0.06 + level * 0.1
 
-        Ellipse()
-            .fill(
-                RadialGradient(
-                    colors: [color1, color2, color2.opacity(0)],
-                    center: UnitPoint(x: 0.4 + sin(t * 0.3 + phase) * 0.12, y: 0.4 + cos(t * 0.2) * 0.08),
-                    startRadius: 5,
-                    endRadius: size * 0.45
-                )
-            )
-            .frame(width: size * sx, height: size * sy)
-            .rotationEffect(.degrees(t * speed * 10 + phase * 40))
-            .offset(x: dx, y: dy)
-            .blur(radius: blur)
+        let blobW = r * 2 * s
+        let blobH = r * 2 * s * 0.7
+        let blobCenter = CGPoint(x: center.x + dx, y: center.y + dy)
+        let blobRect = CGRect(x: blobCenter.x - blobW / 2, y: blobCenter.y - blobH / 2, width: blobW, height: blobH)
+
+        var blobCtx = context
+        blobCtx.addFilter(.blur(radius: blur))
+        blobCtx.fill(Ellipse().path(in: blobRect), with: .radialGradient(
+            Gradient(colors: [color, color.opacity(0)]),
+            center: blobCenter,
+            startRadius: 5,
+            endRadius: blobW * 0.5
+        ))
     }
-
-    // MARK: - Scan Line
-
-    @ViewBuilder
-    private func scanLine(t: Double) -> some View {
-        let y = sin(t * fluidSpeed * 0.8) * Double(size) * 0.4
-        Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [.clear, Color(red: 0.4, green: 0.75, blue: 1.0).opacity(0.15), .clear],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
-            .frame(width: size, height: 2)
-            .blur(radius: 1)
-            .offset(y: y)
-    }
-
-    // MARK: - Orbital Ring
-
-    @ViewBuilder
-    private func orbitalRing(t: Double, level: CGFloat, tilt: Double, speed: Double, radius: CGFloat, opacity: Double) -> some View {
-        let rotation = t * speed * 60
-        Circle()
-            .strokeBorder(
-                AngularGradient(
-                    colors: [
-                        Theme.accent.opacity(0),
-                        Theme.accent.opacity(opacity + Double(level) * 0.1),
-                        Color(red: 0.3, green: 0.65, blue: 1.0).opacity(opacity * 0.7),
-                        Theme.accent.opacity(0),
-                    ],
-                    center: .center,
-                    startAngle: .degrees(0),
-                    endAngle: .degrees(360)
-                ),
-                lineWidth: 1.0
-            )
-            .frame(width: radius * 2, height: radius * 2)
-            .rotation3DEffect(.degrees(tilt), axis: (x: 1, y: 0.3, z: 0))
-            .rotationEffect(.degrees(rotation))
-    }
-
-    // MARK: - Energy Pulse
-
-    @ViewBuilder
-    private func energyPulse(t: Double, level: CGFloat) -> some View {
-        let pulseScale = 1.0 + sin(t * 2.5) * 0.03 + Double(level) * 0.08
-        Circle()
-            .strokeBorder(
-                RadialGradient(
-                    colors: [Theme.accent.opacity(0.2 + Double(level) * 0.15), Theme.accent.opacity(0)],
-                    center: .center,
-                    startRadius: size * 0.45,
-                    endRadius: size * 0.52
-                ),
-                lineWidth: 2
-            )
-            .frame(width: size + 8, height: size + 8)
-            .scaleEffect(pulseScale)
-    }
-
-    // MARK: - Glass Shell
-
-    private var glassShell: some View {
-        ZStack {
-            Circle()
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            .white.opacity(0.5),
-                            Color(red: 0.7, green: 0.85, blue: 1.0).opacity(0.25),
-                            .white.opacity(0.1),
-                            Color(red: 0.6, green: 0.8, blue: 1.0).opacity(0.35),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.5
-                )
-                .frame(width: size, height: size)
-
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            .clear,
-                            Color(red: 0.85, green: 0.92, blue: 1.0).opacity(0.06),
-                            Color(red: 0.75, green: 0.88, blue: 1.0).opacity(0.1),
-                        ],
-                        center: .center,
-                        startRadius: size * 0.2,
-                        endRadius: size * 0.5
-                    )
-                )
-                .frame(width: size, height: size)
-        }
-    }
-
-    // MARK: - Glass Reflections
-
-    private var glassReflections: some View {
-        ZStack {
-            Ellipse()
-                .fill(
-                    LinearGradient(
-                        colors: [.white.opacity(0.45), .white.opacity(0)],
-                        startPoint: .topLeading,
-                        endPoint: .center
-                    )
-                )
-                .frame(width: size * 0.45, height: size * 0.28)
-                .offset(x: -size * 0.1, y: -size * 0.22)
-                .blur(radius: 5)
-
-            Circle()
-                .fill(.white.opacity(0.3))
-                .frame(width: size * 0.06, height: size * 0.06)
-                .offset(x: -size * 0.22, y: -size * 0.26)
-                .blur(radius: 1.5)
-
-            Ellipse()
-                .fill(
-                    LinearGradient(
-                        colors: [.clear, Color(red: 0.7, green: 0.88, blue: 1.0).opacity(0.15)],
-                        startPoint: .center,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: size * 0.6, height: size * 0.15)
-                .offset(y: size * 0.38)
-                .blur(radius: 3)
-        }
-    }
-
-    // MARK: - Speed
 
     private var fluidSpeed: Double {
         switch state {
         case .idle: 0.5
         case .listening: 1.0
-        case .processing: 1.6
-        case .speaking: 1.2
+        case .processing: 1.5
+        case .speaking: 1.1
         }
     }
 }
 
-#Preview("Idle") {
+#Preview {
     ZStack {
         Color(red: 0.93, green: 0.94, blue: 0.95).ignoresSafeArea()
-        VoiceOrbView(state: .idle, audioLevel: 0)
-    }
-}
-
-#Preview("Speaking") {
-    ZStack {
-        Color(red: 0.93, green: 0.94, blue: 0.95).ignoresSafeArea()
-        VoiceOrbView(state: .speaking, audioLevel: 0.5)
+        VoiceOrbView(state: .speaking, audioLevel: 0.4)
     }
 }
 #endif
