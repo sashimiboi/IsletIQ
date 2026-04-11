@@ -13,6 +13,8 @@ actor AgentClient {
         let session_id: String?
         let model_id: String?
         let image_base64: String?
+        let images_base64: [String]?
+        let timezone: String?
     }
 
     struct PendingAction: Codable {
@@ -114,7 +116,7 @@ actor AgentClient {
 
     // MARK: - Send Message with Context
 
-    func sendMessage(message: String, agent: String, sessionId: String? = nil, context: String? = nil, imageBase64: String? = nil) async throws -> ChatResponse {
+    func sendMessage(message: String, agent: String, sessionId: String? = nil, context: String? = nil, imagesBase64: [String]? = nil, imageBase64: String? = nil) async throws -> ChatResponse {
         guard let url = URL(string: "\(baseURL)/chat") else {
             throw AgentError.serverError("Invalid URL: \(baseURL)/chat")
         }
@@ -140,8 +142,10 @@ actor AgentClient {
             message: fullMessage,
             agent: agent,
             session_id: sessionId,
-            model_id: "claude-sonnet-4-6",
-            image_base64: imageBase64
+            model_id: nil,
+            image_base64: imageBase64,
+            images_base64: imagesBase64,
+            timezone: TimeZone.current.identifier
         )
         request.httpBody = try JSONEncoder().encode(body)
 
@@ -178,8 +182,10 @@ actor AgentClient {
             message: fullMessage,
             agent: agent,
             session_id: sessionId,
-            model_id: "claude-sonnet-4-6",
-            image_base64: imageBase64
+            model_id: nil,
+            image_base64: imageBase64,
+            images_base64: nil,
+            timezone: TimeZone.current.identifier
         )
         request.httpBody = try JSONEncoder().encode(body)
 
