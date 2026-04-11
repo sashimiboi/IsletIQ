@@ -3,9 +3,14 @@ import Foundation
 
 actor ElevenLabsClient {
     private let modelId = "eleven_flash_v2_5"
-    // Rachel - clear, professional female voice
-    private let voiceId = "21m00Tcm4TlvDq8ikWAM"
+    private var voiceId: String = {
+        UserDefaults.standard.string(forKey: "elevenlabs_voice_id") ?? "EXAVITQu4vr4xnSDxMaL"
+    }()
     private let outputFormat = "mp3_44100_128"
+
+    func setVoice(_ id: String) {
+        voiceId = id
+    }
 
     private var apiKey: String {
         KeychainHelper.load(key: "elevenlabs_api_key") ?? ""

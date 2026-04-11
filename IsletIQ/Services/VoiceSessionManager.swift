@@ -74,6 +74,10 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         responseText = ""
     }
 
+    func updateVoice(_ voiceId: String) {
+        Task { await ttsClient.setVoice(voiceId) }
+    }
+
     func interruptSpeaking() {
         ttsTask?.cancel()
         ttsTask = nil

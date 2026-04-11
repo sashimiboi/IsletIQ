@@ -12,7 +12,7 @@ struct VoiceOrbView: View {
     let state: VoiceState
     let audioLevel: Float
 
-    private let baseSize: CGFloat = 100
+    private let size: CGFloat = 180
 
     var body: some View {
         TimelineView(.animation) { timeline in
@@ -20,164 +20,224 @@ struct VoiceOrbView: View {
             let level = CGFloat(audioLevel)
 
             ZStack {
-                // Soft outer halo
-                Circle()
-                    .fill(haloGradient)
-                    .frame(width: baseSize + 90, height: baseSize + 90)
-                    .scaleEffect(outerScale(t: t, level: level, phase: 1.5))
-                    .opacity(state == .idle ? 0.3 : 0.5)
-                    .blur(radius: 40)
+                // Orbital rings (sci-fi)
+                orbitalRing(t: t, level: level, tilt: 75, speed: 0.3, radius: size * 0.58, opacity: 0.12)
+                orbitalRing(t: t, level: level, tilt: 65, speed: -0.2, radius: size * 0.54, opacity: 0.08)
 
-                // Mid glow ring
-                Circle()
-                    .fill(midGradient)
-                    .frame(width: baseSize + 55, height: baseSize + 55)
-                    .scaleEffect(outerScale(t: t, level: level, phase: 1.0))
-                    .opacity(0.4)
-                    .blur(radius: 25)
+                // Glass sphere shell
+                glassShell
 
-                // Inner glow
-                Circle()
-                    .fill(innerGradient)
-                    .frame(width: baseSize + 25, height: baseSize + 25)
-                    .scaleEffect(coreScale(t: t, level: level) * 1.05)
-                    .opacity(0.5)
-                    .blur(radius: 14)
+                // Inner fluid layers
+                ZStack {
+                    fluidBlob(t: t, level: level, phase: 0, color1: Color(red: 0.0, green: 0.08, blue: 0.45), color2: Color(red: 0.0, green: 0.15, blue: 0.6), scaleBase: 0.72, blur: 10)
+                    fluidBlob(t: t, level: level, phase: 1.8, color1: Color(red: 0.0, green: 0.25, blue: 0.75), color2: Color(red: 0.05, green: 0.4, blue: 0.85), scaleBase: 0.58, blur: 8)
+                    fluidBlob(t: t, level: level, phase: 3.5, color1: Color(red: 0.25, green: 0.65, blue: 1.0), color2: Color(red: 0.45, green: 0.8, blue: 1.0), scaleBase: 0.42, blur: 12)
+                    fluidBlob(t: t, level: level, phase: 5.0, color1: .white.opacity(0.35), color2: .white.opacity(0.08), scaleBase: 0.5, blur: 16)
 
-                // Core sphere
-                Circle()
-                    .fill(coreGradient)
-                    .frame(width: baseSize, height: baseSize)
-                    .scaleEffect(coreScale(t: t, level: level))
-                    .shadow(color: shadowColor.opacity(0.25), radius: 24, y: 4)
+                    // Scan line effect
+                    scanLine(t: t)
+                }
+                .clipShape(Circle())
+                .frame(width: size - 6, height: size - 6)
 
-                // Specular highlight
-                Ellipse()
-                    .fill(
-                        LinearGradient(
-                            colors: [.white.opacity(0.5), .white.opacity(0)],
-                            startPoint: .top,
-                            endPoint: .center
-                        )
-                    )
-                    .frame(width: baseSize * 0.55, height: baseSize * 0.35)
-                    .offset(y: -baseSize * 0.15)
-                    .scaleEffect(coreScale(t: t, level: level))
-                    .blur(radius: 4)
+                // Energy pulse ring
+                energyPulse(t: t, level: level)
+
+                // Glass reflections
+                glassReflections
+
+                // Outer orbital ring (in front)
+                orbitalRing(t: t, level: level, tilt: 80, speed: 0.15, radius: size * 0.56, opacity: 0.15)
             }
-            .rotationEffect(.degrees(state == .processing ? t.truncatingRemainder(dividingBy: 12) * 30 : 0))
+            .frame(width: size + 40, height: size + 40)
         }
         .animation(.easeInOut(duration: 0.4), value: state)
     }
 
-    // MARK: - Scale
+    // MARK: - Fluid Blob
 
-    private func coreScale(t: Double, level: CGFloat) -> CGFloat {
-        let breath = sin(t * breathSpeed) * breathAmp
-        let audio = level * audioAmp
-        return 1.0 + breath + audio
+    @ViewBuilder
+    private func fluidBlob(t: Double, level: CGFloat, phase: Double, color1: Color, color2: Color, scaleBase: CGFloat, blur: CGFloat) -> some View {
+        let speed = fluidSpeed
+        let angle = t * speed * 0.5 + phase
+        let dx = sin(angle) * Double(size) * 0.14 * (1.0 + Double(level) * 0.7)
+        let dy = cos(angle * 0.7 + phase) * Double(size) * 0.11
+        let sx = scaleBase + CGFloat(sin(t * speed * 0.8 + phase)) * 0.07 + level * 0.13
+        let sy = scaleBase + CGFloat(cos(t * speed * 0.6 + phase * 1.3)) * 0.05 + level * 0.1
+
+        Ellipse()
+            .fill(
+                RadialGradient(
+                    colors: [color1, color2, color2.opacity(0)],
+                    center: UnitPoint(x: 0.4 + sin(t * 0.3 + phase) * 0.12, y: 0.4 + cos(t * 0.2) * 0.08),
+                    startRadius: 5,
+                    endRadius: size * 0.45
+                )
+            )
+            .frame(width: size * sx, height: size * sy)
+            .rotationEffect(.degrees(t * speed * 10 + phase * 40))
+            .offset(x: dx, y: dy)
+            .blur(radius: blur)
     }
 
-    private func outerScale(t: Double, level: CGFloat, phase: Double) -> CGFloat {
-        let breath = sin(t * breathSpeed + phase) * breathAmp * 1.6
-        let audio = level * audioAmp * 2.0
-        return 1.0 + breath + audio
+    // MARK: - Scan Line
+
+    @ViewBuilder
+    private func scanLine(t: Double) -> some View {
+        let y = sin(t * fluidSpeed * 0.8) * Double(size) * 0.4
+        Rectangle()
+            .fill(
+                LinearGradient(
+                    colors: [.clear, Color(red: 0.4, green: 0.75, blue: 1.0).opacity(0.15), .clear],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .frame(width: size, height: 2)
+            .blur(radius: 1)
+            .offset(y: y)
     }
 
-    // MARK: - State Parameters
+    // MARK: - Orbital Ring
 
-    private var breathSpeed: Double {
-        switch state {
-        case .idle: 1.0
-        case .listening: 1.8
-        case .processing: 2.5
-        case .speaking: 1.8
+    @ViewBuilder
+    private func orbitalRing(t: Double, level: CGFloat, tilt: Double, speed: Double, radius: CGFloat, opacity: Double) -> some View {
+        let rotation = t * speed * 60
+        Circle()
+            .strokeBorder(
+                AngularGradient(
+                    colors: [
+                        Theme.accent.opacity(0),
+                        Theme.accent.opacity(opacity + Double(level) * 0.1),
+                        Color(red: 0.3, green: 0.65, blue: 1.0).opacity(opacity * 0.7),
+                        Theme.accent.opacity(0),
+                    ],
+                    center: .center,
+                    startAngle: .degrees(0),
+                    endAngle: .degrees(360)
+                ),
+                lineWidth: 1.0
+            )
+            .frame(width: radius * 2, height: radius * 2)
+            .rotation3DEffect(.degrees(tilt), axis: (x: 1, y: 0.3, z: 0))
+            .rotationEffect(.degrees(rotation))
+    }
+
+    // MARK: - Energy Pulse
+
+    @ViewBuilder
+    private func energyPulse(t: Double, level: CGFloat) -> some View {
+        let pulseScale = 1.0 + sin(t * 2.5) * 0.03 + Double(level) * 0.08
+        Circle()
+            .strokeBorder(
+                RadialGradient(
+                    colors: [Theme.accent.opacity(0.2 + Double(level) * 0.15), Theme.accent.opacity(0)],
+                    center: .center,
+                    startRadius: size * 0.45,
+                    endRadius: size * 0.52
+                ),
+                lineWidth: 2
+            )
+            .frame(width: size + 8, height: size + 8)
+            .scaleEffect(pulseScale)
+    }
+
+    // MARK: - Glass Shell
+
+    private var glassShell: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            .white.opacity(0.5),
+                            Color(red: 0.7, green: 0.85, blue: 1.0).opacity(0.25),
+                            .white.opacity(0.1),
+                            Color(red: 0.6, green: 0.8, blue: 1.0).opacity(0.35),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.5
+                )
+                .frame(width: size, height: size)
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            .clear,
+                            Color(red: 0.85, green: 0.92, blue: 1.0).opacity(0.06),
+                            Color(red: 0.75, green: 0.88, blue: 1.0).opacity(0.1),
+                        ],
+                        center: .center,
+                        startRadius: size * 0.2,
+                        endRadius: size * 0.5
+                    )
+                )
+                .frame(width: size, height: size)
         }
     }
 
-    private var breathAmp: CGFloat {
-        switch state {
-        case .idle: 0.025
-        case .listening: 0.015
-        case .processing: 0.04
-        case .speaking: 0.015
+    // MARK: - Glass Reflections
+
+    private var glassReflections: some View {
+        ZStack {
+            Ellipse()
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0.45), .white.opacity(0)],
+                        startPoint: .topLeading,
+                        endPoint: .center
+                    )
+                )
+                .frame(width: size * 0.45, height: size * 0.28)
+                .offset(x: -size * 0.1, y: -size * 0.22)
+                .blur(radius: 5)
+
+            Circle()
+                .fill(.white.opacity(0.3))
+                .frame(width: size * 0.06, height: size * 0.06)
+                .offset(x: -size * 0.22, y: -size * 0.26)
+                .blur(radius: 1.5)
+
+            Ellipse()
+                .fill(
+                    LinearGradient(
+                        colors: [.clear, Color(red: 0.7, green: 0.88, blue: 1.0).opacity(0.15)],
+                        startPoint: .center,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: size * 0.6, height: size * 0.15)
+                .offset(y: size * 0.38)
+                .blur(radius: 3)
         }
     }
 
-    private var audioAmp: CGFloat {
+    // MARK: - Speed
+
+    private var fluidSpeed: Double {
         switch state {
-        case .idle: 0.0
-        case .listening: 0.12
-        case .processing: 0.0
-        case .speaking: 0.10
+        case .idle: 0.5
+        case .listening: 1.0
+        case .processing: 1.6
+        case .speaking: 1.2
         }
-    }
-
-    // MARK: - Colors
-
-    // Deep blue core: brand primary to accent
-    private var coreGradient: RadialGradient {
-        let center: Color = {
-            switch state {
-            case .idle: return Color(red: 0.2, green: 0.45, blue: 0.85)     // soft blue
-            case .listening: return Color(red: 0.25, green: 0.55, blue: 0.95) // brighter blue
-            case .processing: return Color(red: 0.15, green: 0.35, blue: 0.75) // deeper
-            case .speaking: return Color(red: 0.3, green: 0.6, blue: 0.95)   // vibrant
-            }
-        }()
-        return RadialGradient(
-            colors: [center, Theme.primary, Theme.primaryDark],
-            center: .center,
-            startRadius: 8,
-            endRadius: baseSize * 0.55
-        )
-    }
-
-    private var innerGradient: RadialGradient {
-        RadialGradient(
-            colors: [
-                state == .speaking ? Theme.accent.opacity(0.6) : Theme.primary.opacity(0.5),
-                Theme.primary.opacity(0),
-            ],
-            center: .center,
-            startRadius: 10,
-            endRadius: baseSize * 0.7
-        )
-    }
-
-    private var midGradient: RadialGradient {
-        RadialGradient(
-            colors: [Theme.primary.opacity(0.3), Theme.primary.opacity(0)],
-            center: .center,
-            startRadius: 15,
-            endRadius: baseSize * 0.9
-        )
-    }
-
-    private var haloGradient: RadialGradient {
-        let color = state == .listening || state == .speaking ? Theme.accent : Theme.primary
-        return RadialGradient(
-            colors: [color.opacity(0.25), color.opacity(0)],
-            center: .center,
-            startRadius: 20,
-            endRadius: baseSize * 1.1
-        )
-    }
-
-    private var shadowColor: Color {
-        Theme.primary
     }
 }
 
-#Preview {
+#Preview("Idle") {
     ZStack {
-        Theme.bg.ignoresSafeArea()
-        VStack(spacing: 40) {
-            VoiceOrbView(state: .listening, audioLevel: 0.5)
-            Text("Listening...")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(Theme.textSecondary)
-        }
+        Color(red: 0.93, green: 0.94, blue: 0.95).ignoresSafeArea()
+        VoiceOrbView(state: .idle, audioLevel: 0)
+    }
+}
+
+#Preview("Speaking") {
+    ZStack {
+        Color(red: 0.93, green: 0.94, blue: 0.95).ignoresSafeArea()
+        VoiceOrbView(state: .speaking, audioLevel: 0.5)
     }
 }
 #endif
