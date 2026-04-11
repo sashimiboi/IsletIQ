@@ -174,22 +174,13 @@ struct VoiceSessionView: View {
 
     private var voicePickerSheet: some View {
         NavigationStack {
-            List {
-                Section("Female") {
-                    ForEach(voiceOptions.filter { $0.gender == "female" }) { voice in
-                        voiceRow(voice)
-                    }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    voiceSection("Female", voices: voiceOptions.filter { $0.gender == "female" })
+                    voiceSection("Male", voices: voiceOptions.filter { $0.gender == "male" })
+                    voiceSection("Neutral", voices: voiceOptions.filter { $0.gender == "neutral" })
                 }
-                Section("Male") {
-                    ForEach(voiceOptions.filter { $0.gender == "male" }) { voice in
-                        voiceRow(voice)
-                    }
-                }
-                Section("Neutral") {
-                    ForEach(voiceOptions.filter { $0.gender == "neutral" }) { voice in
-                        voiceRow(voice)
-                    }
-                }
+                .padding(16)
             }
             .navigationTitle("Voice")
             .navigationBarTitleDisplayMode(.inline)
@@ -203,28 +194,50 @@ struct VoiceSessionView: View {
         .presentationDetents([.medium, .large])
     }
 
-    private func voiceRow(_ voice: VoiceOption) -> some View {
-        Button {
-            selectedVoice = voice
-            UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
-            manager.updateVoice(voice.id)
-            showVoicePicker = false
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(voice.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text(voice.description)
-                        .font(.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                Spacer()
-                if voice.id == selectedVoice.id {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.primary)
+    @ViewBuilder
+    private func voiceSection(_ title: String, voices: [VoiceOption]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.textTertiary)
+                .textCase(.uppercase)
+                .padding(.leading, 4)
+
+            VStack(spacing: 0) {
+                ForEach(Array(voices.enumerated()), id: \.element.id) { index, voice in
+                    if index > 0 {
+                        Divider().padding(.leading, 16)
+                    }
+                    Button {
+                        selectedVoice = voice
+                        UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
+                        manager.updateVoice(voice.id)
+                        showVoicePicker = false
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(voice.name)
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(Theme.textPrimary)
+                                Text(voice.description)
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                            Spacer()
+                            if voice.id == selectedVoice.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(Theme.primary)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
+            .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
