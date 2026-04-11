@@ -689,12 +689,12 @@ struct AgentChatView: View {
                 agentClient: agentClient,
                 agentName: selectedAgent.id == "islet1" ? "orchestrator" : selectedAgent.id,
                 sessionId: sessionId,
-                context: buildContext()
-            ) { userMsg, assistantMsg in
-                // Save voice exchange to chat history
-                messages.append(ChatMessage(role: .user, content: userMsg, agent: "", timestamp: .now))
-                messages.append(ChatMessage(role: .assistant, content: assistantMsg, agent: selectedAgent.name, timestamp: .now))
-            }
+                context: buildContext(),
+                onExchange: { userMsg, assistantMsg in
+                    messages.append(ChatMessage(role: .user, content: userMsg, agent: "", timestamp: .now))
+                    messages.append(ChatMessage(role: .assistant, content: assistantMsg, agent: selectedAgent.name, timestamp: .now))
+                }
+            )
         }
         #endif
     }
