@@ -88,5 +88,18 @@ final class SpeechManager {
             startRecording()
         }
     }
+
+    /// Reset audio session after voice mode ends so inline mic still works.
+    func resetAudioSession() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+        recognitionRequest = nil
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        isRecording = false
+    }
 }
 #endif

@@ -115,6 +115,7 @@ struct AgentChatView: View {
     @State private var showSessions = false
     @State private var isRecording = false
     @State private var micPulse = false
+    @State private var showVoiceMode = false
     #if os(iOS)
     @State private var speechManager = SpeechManager()
     #endif
@@ -611,29 +612,15 @@ struct AgentChatView: View {
                         .padding(.vertical, 8)
 
                     #if os(iOS)
+                    // Inline dictation (mic)
                     Button { startVoiceInput() } label: {
-                        ZStack {
-                            if isRecording {
-                                // Pulsing ring
-                                Circle()
-                                    .fill(Theme.high.opacity(0.15))
-                                    .frame(width: 32, height: 32)
-                                    .scaleEffect(micPulse ? 1.4 : 1.0)
-                                    .opacity(micPulse ? 0 : 0.6)
-                                    .animation(.easeInOut(duration: 1).repeatForever(autoreverses: false), value: micPulse)
-                            }
-                            Image(systemName: isRecording ? "stop.fill" : "mic")
-                                .font(isRecording ? .caption : .subheadline)
-                                .foregroundStyle(isRecording ? .white : Theme.textTertiary)
-                                .frame(width: 28, height: 28)
-                                .background(isRecording ? Theme.high : .clear, in: Circle())
-                        }
-                        .frame(width: 32, height: 32)
+                        Image(systemName: isRecording ? "stop.fill" : "mic")
+                            .font(isRecording ? .caption : .subheadline)
+                            .foregroundStyle(isRecording ? .white : Theme.textTertiary)
+                            .frame(width: 28, height: 28)
+                            .background(isRecording ? Theme.high : .clear, in: Circle())
                     }
                     .buttonStyle(.plain)
-                    .onChange(of: isRecording) { _, recording in
-                        micPulse = recording
-                    }
                     #endif
                 }
                 .padding(.trailing, 4)
@@ -649,6 +636,17 @@ struct AgentChatView: View {
                     }
                     .transition(.opacity)
                 }
+
+                #if os(iOS)
+                // Voice mode
+                Button { showVoiceMode = true } label: {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(Theme.primary)
+                        .frame(width: 36, height: 36)
+                }
+                .buttonStyle(.plain)
+                #endif
 
                 // Send (aligned to bottom)
                 Button {
@@ -685,6 +683,14 @@ struct AgentChatView: View {
                 showCamera = false
             }
             .ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $showVoiceMode) {
+            VoiceSessionView(
+                agentClient: agentClient,
+                agentName: selectedAgent.id == "islet1" ? "orchestrator" : selectedAgent.id,
+                sessionId: sessionId,
+                context: buildContext()
+            )
         }
         #endif
     }
@@ -772,6 +778,21 @@ struct AgentChatView: View {
             ctx.append("Recent meals:\n" + meals.joined(separator: "\n"))
         }
 
+        // Sleep
+        if let sleep = healthKit?.lastSleep {
+            var sleepCtx = "Sleep last night: \(String(format: "%.1f", sleep.totalHours)) hours (\(sleep.quality) quality)"
+            sleepCtx += "\nBreakdown: \(Int(sleep.deepMinutes))m deep, \(Int(sleep.remMinutes))m REM, \(Int(sleep.coreMinutes))m core, \(Int(sleep.awakeMinutes))m awake"
+            ctx.append(sleepCtx)
+        }
+
+        // Activity
+        if let hk = healthKit {
+            var activity: [String] = []
+            if hk.stepsToday > 0 { activity.append("Steps today: \(hk.stepsToday)") }
+            if hk.activeCaloriesToday > 0 { activity.append("Active calories burned today: \(Int(hk.activeCaloriesToday)) kcal") }
+            if !activity.isEmpty { ctx.append(activity.joined(separator: "\n")) }
+        }
+
         // Medications
         if !todayMedications.isEmpty {
             let medLines = todayMedications.map { med in
@@ -785,16 +806,8 @@ struct AgentChatView: View {
             ctx.append("Today's medications:\n" + medLines.joined(separator: "\n"))
         }
 
-        // Pump data
-        let boluses = MockData.bolusData().prefix(5)
-        if !boluses.isEmpty {
-            let bolusStr = boluses.map { b in
-                let fmt = DateFormatter()
-                fmt.dateFormat = "h:mm a"
-                return "\(fmt.string(from: b.timestamp)): \(b.insulinDelivered)u for \(b.carbs)g carbs"
-            }
-            ctx.append("Recent boluses:\n" + bolusStr.joined(separator: "\n"))
-        }
+        // Pump / Insulin data — Omnipod doesn't write to HealthKit, agent gets this from Glooko data via tools
+        // (The orchestrator agent has access to bolus_data and insulin_daily tables directly)
 
         return ctx.joined(separator: "\n\n")
     }
