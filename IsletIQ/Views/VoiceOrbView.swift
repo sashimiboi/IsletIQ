@@ -54,15 +54,15 @@ struct OrbMetalView: UIViewRepresentable {
 // MARK: - Uniforms (must match Metal struct layout)
 
 struct OrbUniforms {
-    var time: Float = 0
-    var animation: Float = 0
-    var inputVolume: Float = 0
-    var outputVolume: Float = 0
-    var color1: SIMD2<Float> = SIMD2(0.792, 0.863)  // #CADCFC → r,g
-    var color1b: SIMD2<Float> = SIMD2(0.988, 0)      // b, pad
-    var color2: SIMD2<Float> = SIMD2(0.627, 0.725)   // #A0B9D1 → r,g
-    var color2b: SIMD2<Float> = SIMD2(0.820, 0)      // b, pad
-    var offsets: (Float, Float, Float, Float, Float, Float, Float) = (0, 0, 0, 0, 0, 0, 0)
+    var time: Float = 0        // 0
+    var animation: Float = 0   // 4
+    var inputVolume: Float = 0 // 8
+    var outputVolume: Float = 0 // 12
+    var color1: SIMD2<Float> = SIMD2(0.792, 0.863)  // 16
+    var color1b: SIMD2<Float> = SIMD2(0.988, 0)     // 24
+    var color2: SIMD2<Float> = SIMD2(0.627, 0.725)  // 32
+    var color2b: SIMD2<Float> = SIMD2(0.820, 0)     // 40
+    var offsets: (Float, Float, Float, Float, Float, Float, Float, Float) = (0, 0, 0, 0, 0, 0, 0, 0) // 48, pad to 80
 }
 
 // MARK: - Metal Renderer
@@ -92,7 +92,8 @@ class OrbRenderer: NSObject, MTKViewDelegate {
             Float.random(in: 0...(2 * .pi)),
             Float.random(in: 0...(2 * .pi)),
             Float.random(in: 0...(2 * .pi)),
-            Float.random(in: 0...(2 * .pi))
+            Float.random(in: 0...(2 * .pi)),
+            0 // padding
         )
 
         // IsletIQ brand colors (blue tones)

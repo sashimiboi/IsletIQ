@@ -11,11 +11,11 @@ struct OrbUniforms {
     float animation;
     float inputVolume;
     float outputVolume;
-    float2 color1;  // packed as (r, g)
-    float2 color1b; // packed as (b, 0)
-    float2 color2;  // packed as (r, g)
-    float2 color2b; // packed as (b, 0)
-    float offsets[7];
+    float2 color1;
+    float2 color1b;
+    float2 color2;
+    float2 color2b;
+    float offsets[8]; // 7 used + 1 padding
 };
 
 // Simple 2D hash
