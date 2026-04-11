@@ -2,6 +2,7 @@
 import Foundation
 import Speech
 import AVFoundation
+import UIKit
 
 @Observable
 @MainActor
@@ -32,7 +33,7 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var levelTimer: Timer?
+    private var displayLink: CADisplayLink?
 
     // MARK: - Silence Detection
 
@@ -81,8 +82,8 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         ttsTask = nil
         audioPlayer?.stop()
         audioPlayer = nil
-        levelTimer?.invalidate()
-        levelTimer = nil
+        displayLink?.invalidate()
+        displayLink = nil
         isPlayingAudio = false
         if !lastUserMessage.isEmpty && !responseText.isEmpty {
             onExchange?(lastUserMessage, responseText)
@@ -95,8 +96,8 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
     private func startListening() {
         audioPlayer?.stop()
         audioPlayer = nil
-        levelTimer?.invalidate()
-        levelTimer = nil
+        displayLink?.invalidate()
+        displayLink = nil
         stopRecognition()
 
         state = .listening
@@ -160,8 +161,13 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         let rms = sqrt(sum / Float(count))
         let db = 20 * log10(max(rms, 1e-7))
 
-        let normalized = max(0, min(1, (db + 50) / 40))
-        audioLevel = audioLevel * 0.7 + normalized * 0.3
+        let normalized = max(0, min(1, (db + 45) / 35))
+        // Fast attack, slower decay for responsive animation
+        if normalized > audioLevel {
+            audioLevel = audioLevel * 0.3 + normalized * 0.7  // fast rise
+        } else {
+            audioLevel = audioLevel * 0.8 + normalized * 0.2  // slow fall
+        }
 
         if state == .listening && speechDetected {
             if db < silenceThreshold {
@@ -316,18 +322,7 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
             print("[VoiceSession] Playing MP3: \(data.count) bytes, duration=\(player.duration)s")
 
             player.play()
-
-            // Poll audio levels for orb animation
-            levelTimer?.invalidate()
-            levelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self, let p = self.audioPlayer, p.isPlaying else { return }
-                    p.updateMeters()
-                    let db = p.averagePower(forChannel: 0)
-                    let normalized = max(0, min(1, (db + 50) / 40))
-                    self.audioLevel = self.audioLevel * 0.6 + normalized * 0.4
-                }
-            }
+            startPlaybackMetering()
         } catch {
             print("[VoiceSession] AVAudioPlayer error: \(error)")
             isPlayingAudio = false
@@ -335,12 +330,32 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    private func startPlaybackMetering() {
+        displayLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(pollPlaybackLevel))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 15, maximum: 30)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc private func pollPlaybackLevel() {
+        guard let p = audioPlayer, p.isPlaying else { return }
+        p.updateMeters()
+        let db = p.averagePower(forChannel: 0)
+        let normalized = max(0, min(1, (db + 45) / 35))
+        if normalized > audioLevel {
+            audioLevel = audioLevel * 0.3 + normalized * 0.7
+        } else {
+            audioLevel = audioLevel * 0.75 + normalized * 0.25
+        }
+    }
+
     // AVAudioPlayerDelegate - called when playback finishes
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor [weak self] in
             guard let self else { return }
-            self.levelTimer?.invalidate()
-            self.levelTimer = nil
+            self.displayLink?.invalidate()
+            self.displayLink = nil
             self.audioLevel = 0
             self.isPlayingAudio = false
             print("[VoiceSession] Playback finished (success=\(flag))")
@@ -400,8 +415,8 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
         ttsTask = nil
         audioPlayer?.stop()
         audioPlayer = nil
-        levelTimer?.invalidate()
-        levelTimer = nil
+        displayLink?.invalidate()
+        displayLink = nil
         stopRecognition()
         stopEngine()
         isPlayingAudio = false
