@@ -24,7 +24,6 @@ private let voiceOptions: [VoiceOption] = [
 struct VoiceSessionView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var manager = VoiceSessionManager()
-    @State private var showVoicePicker = false
     @State private var selectedVoice: VoiceOption = {
         let savedId = UserDefaults.standard.string(forKey: "elevenlabs_voice_id") ?? "EXAVITQu4vr4xnSDxMaL"
         return voiceOptions.first { $0.id == savedId } ?? voiceOptions[0]
@@ -43,22 +42,55 @@ struct VoiceSessionView: View {
             VStack(spacing: 0) {
                 // Top bar
                 HStack {
-                    // Voice picker button
-                    Button { showVoicePicker = true } label: {
+                    // Voice picker menu
+                    Menu {
+                        Section("Female") {
+                            ForEach(voiceOptions.filter { $0.gender == "female" }) { voice in
+                                Button {
+                                    selectedVoice = voice
+                                    UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
+                                    manager.updateVoice(voice.id)
+                                } label: {
+                                    Label(voice.name, systemImage: voice.id == selectedVoice.id ? "checkmark" : "")
+                                }
+                            }
+                        }
+                        Section("Male") {
+                            ForEach(voiceOptions.filter { $0.gender == "male" }) { voice in
+                                Button {
+                                    selectedVoice = voice
+                                    UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
+                                    manager.updateVoice(voice.id)
+                                } label: {
+                                    Label(voice.name, systemImage: voice.id == selectedVoice.id ? "checkmark" : "")
+                                }
+                            }
+                        }
+                        Section("Neutral") {
+                            ForEach(voiceOptions.filter { $0.gender == "neutral" }) { voice in
+                                Button {
+                                    selectedVoice = voice
+                                    UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
+                                    manager.updateVoice(voice.id)
+                                } label: {
+                                    Label(voice.name, systemImage: voice.id == selectedVoice.id ? "checkmark" : "")
+                                }
+                            }
+                        }
+                    } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "person.wave.2.fill")
                                 .font(.caption)
                             Text(selectedVoice.name)
                                 .font(.subheadline.weight(.medium))
-                            Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.semibold))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
                         }
                         .foregroundStyle(Theme.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
                         .background(Theme.primary.opacity(0.08), in: Capsule())
                     }
-                    .buttonStyle(.plain)
 
                     Spacer()
 
@@ -149,9 +181,6 @@ struct VoiceSessionView: View {
                 Spacer()
             }
         }
-        .sheet(isPresented: $showVoicePicker) {
-            voicePickerSheet
-        }
         .onAppear {
             KeychainHelper.save(
                 key: "elevenlabs_api_key",
@@ -167,77 +196,6 @@ struct VoiceSessionView: View {
         }
         .onDisappear {
             manager.endSession()
-        }
-    }
-
-    // MARK: - Voice Picker Sheet
-
-    private var voicePickerSheet: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    voiceSection("Female", voices: voiceOptions.filter { $0.gender == "female" })
-                    voiceSection("Male", voices: voiceOptions.filter { $0.gender == "male" })
-                    voiceSection("Neutral", voices: voiceOptions.filter { $0.gender == "neutral" })
-                }
-                .padding(16)
-            }
-            .navigationTitle("Voice")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { showVoicePicker = false }
-                        .fontWeight(.semibold)
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    @ViewBuilder
-    private func voiceSection(_ title: String, voices: [VoiceOption]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Theme.textTertiary)
-                .textCase(.uppercase)
-                .padding(.leading, 4)
-
-            VStack(spacing: 0) {
-                ForEach(Array(voices.enumerated()), id: \.element.id) { index, voice in
-                    if index > 0 {
-                        Divider().padding(.leading, 16)
-                    }
-                    Button {
-                        selectedVoice = voice
-                        UserDefaults.standard.set(voice.id, forKey: "elevenlabs_voice_id")
-                        manager.updateVoice(voice.id)
-                        showVoicePicker = false
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(voice.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(Theme.textPrimary)
-                                Text(voice.description)
-                                    .font(.caption)
-                                    .foregroundStyle(Theme.textTertiary)
-                            }
-                            Spacer()
-                            if voice.id == selectedVoice.id {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(Theme.primary)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .background(Theme.cardBg, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 

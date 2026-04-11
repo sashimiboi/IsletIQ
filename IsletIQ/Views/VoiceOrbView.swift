@@ -12,144 +12,177 @@ struct VoiceOrbView: View {
     let state: VoiceState
     let audioLevel: Float
 
-    private let size: CGFloat = 180
+    private let size: CGFloat = 170
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let level = CGFloat(audioLevel)
 
-            Canvas { context, canvasSize in
-                let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-                let r = size / 2
+            ZStack {
+                // Drop shadow beneath sphere
+                Ellipse()
+                    .fill(Color.black.opacity(0.08))
+                    .frame(width: size * 0.6, height: size * 0.12)
+                    .offset(y: size * 0.52)
+                    .blur(radius: 10)
 
-                // 1. Clip everything to sphere
-                let sphereRect = CGRect(x: center.x - r, y: center.y - r, width: size, height: size)
-                let spherePath = Circle().path(in: sphereRect)
+                // Glass sphere with fluid
+                Canvas { context, canvasSize in
+                    let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                    let r = size / 2
+                    let sphereRect = CGRect(x: center.x - r, y: center.y - r, width: size, height: size)
+                    let spherePath = Circle().path(in: sphereRect)
 
-                // 2. Draw fluid inside sphere
-                context.drawLayer { fluidCtx in
-                    fluidCtx.clip(to: spherePath)
+                    // -- FLUID --
+                    context.drawLayer { ctx in
+                        ctx.clip(to: spherePath)
 
-                    // Fluid fill — gradient from dark blue bottom to cyan top
-                    let fluidTop = center.y - r * fluidLevel(t: t, level: level)
-                    let fluidRect = CGRect(x: center.x - r, y: fluidTop, width: size, height: center.y + r - fluidTop)
+                        let fluidY = center.y - r * fluidLevel(t: t, level: level)
 
-                    // Wave-distorted top edge of fluid
-                    var fluidPath = Path()
-                    fluidPath.move(to: CGPoint(x: center.x - r, y: center.y + r))
-                    fluidPath.addLine(to: CGPoint(x: center.x + r, y: center.y + r))
-                    fluidPath.addLine(to: CGPoint(x: center.x + r, y: fluidTop))
+                        // Fluid body with wave top
+                        var fluid = Path()
+                        fluid.move(to: CGPoint(x: center.x - r, y: center.y + r))
+                        fluid.addLine(to: CGPoint(x: center.x + r, y: center.y + r))
+                        fluid.addLine(to: CGPoint(x: center.x + r, y: fluidY))
+                        let steps = 30
+                        for i in stride(from: steps, through: 0, by: -1) {
+                            let frac = CGFloat(i) / CGFloat(steps)
+                            let x = center.x - r + size * frac
+                            let w1 = sin(Double(frac) * 5.0 + t * fluidSpeed * 2.0) * Double(r) * 0.035 * (1.0 + Double(level) * 2.5)
+                            let w2 = sin(Double(frac) * 8.0 + t * fluidSpeed * 1.5 + 2.0) * Double(r) * 0.015
+                            fluid.addLine(to: CGPoint(x: x, y: fluidY + w1 + w2))
+                        }
+                        fluid.closeSubpath()
 
-                    // Wavy top edge
-                    let steps = 40
-                    for i in stride(from: steps, through: 0, by: -1) {
-                        let frac = CGFloat(i) / CGFloat(steps)
-                        let x = center.x - r + size * frac
-                        let wave1 = sin(Double(frac) * 6.0 + t * fluidSpeed * 2.0) * Double(r) * 0.04 * (1.0 + Double(level) * 2.0)
-                        let wave2 = sin(Double(frac) * 3.5 + t * fluidSpeed * 1.3 + 1.0) * Double(r) * 0.03
-                        let y = fluidTop + wave1 + wave2
-                        fluidPath.addLine(to: CGPoint(x: x, y: y))
+                        ctx.fill(fluid, with: .linearGradient(
+                            Gradient(colors: [
+                                Color(red: 0.0, green: 0.03, blue: 0.2),
+                                Color(red: 0.0, green: 0.1, blue: 0.45),
+                                Color(red: 0.0, green: 0.3, blue: 0.7),
+                                Color(red: 0.15, green: 0.5, blue: 0.9),
+                                Color(red: 0.35, green: 0.7, blue: 1.0),
+                            ]),
+                            startPoint: CGPoint(x: center.x, y: center.y + r),
+                            endPoint: CGPoint(x: center.x, y: fluidY)
+                        ))
+
+                        // Ripple lines
+                        let spacing: CGFloat = 4.5
+                        let count = Int((center.y + r - fluidY) / spacing)
+                        for i in 0..<count {
+                            let baseY = fluidY + CGFloat(i) * spacing + 3
+                            let wave = sin(Double(i) * 0.4 + t * fluidSpeed * 1.2) * Double(r) * 0.015
+                            let y = baseY + wave
+                            let dy = y - center.y
+                            let hw = sqrt(max(0, r * r - dy * dy))
+                            guard hw > 5 else { continue }
+                            let depth = CGFloat(i) / CGFloat(max(count, 1))
+                            let alpha = 0.04 + depth * 0.06
+
+                            var line = Path()
+                            line.move(to: CGPoint(x: center.x - hw + 6, y: y))
+                            line.addLine(to: CGPoint(x: center.x + hw - 6, y: y))
+                            ctx.stroke(line, with: .color(.white.opacity(alpha)), lineWidth: 0.6)
+                        }
+
+                        // Bright meniscus at fluid surface
+                        let meniscus = CGRect(x: center.x - r * 0.5, y: fluidY - 2, width: r, height: 6)
+                        ctx.fill(Ellipse().path(in: meniscus), with: .linearGradient(
+                            Gradient(colors: [Color(red: 0.5, green: 0.85, blue: 1.0).opacity(0.3), .clear]),
+                            startPoint: CGPoint(x: meniscus.midX, y: meniscus.minY),
+                            endPoint: CGPoint(x: meniscus.midX, y: meniscus.maxY)
+                        ))
                     }
-                    fluidPath.closeSubpath()
 
-                    // Gradient fill
-                    fluidCtx.fill(fluidPath, with: .linearGradient(
+                    // -- GLASS EDGE --
+                    // Thick outer ring for glass depth
+                    context.stroke(spherePath, with: .linearGradient(
                         Gradient(colors: [
-                            Color(red: 0.0, green: 0.05, blue: 0.3),  // deep navy bottom
-                            Color(red: 0.0, green: 0.15, blue: 0.55), // dark blue
-                            Color(red: 0.0, green: 0.35, blue: 0.75), // mid blue
-                            Color(red: 0.1, green: 0.55, blue: 0.9),  // blue
-                            Color(red: 0.3, green: 0.7, blue: 1.0),   // cyan at top
+                            Color(red: 0.85, green: 0.9, blue: 1.0).opacity(0.7),
+                            Color(red: 0.6, green: 0.75, blue: 0.95).opacity(0.3),
+                            Color(red: 0.8, green: 0.88, blue: 1.0).opacity(0.15),
+                            Color(red: 0.7, green: 0.82, blue: 0.95).opacity(0.5),
                         ]),
-                        startPoint: CGPoint(x: center.x, y: center.y + r),
-                        endPoint: CGPoint(x: center.x, y: fluidTop)
-                    ))
+                        startPoint: CGPoint(x: center.x - r, y: center.y - r),
+                        endPoint: CGPoint(x: center.x + r, y: center.y + r)
+                    ), lineWidth: 2.5)
 
-                    // Horizontal ripple lines through the fluid
-                    let lineSpacing: CGFloat = 5
-                    let lineCount = Int((center.y + r - fluidTop) / lineSpacing)
-                    for i in 0..<lineCount {
-                        let baseY = fluidTop + CGFloat(i) * lineSpacing + lineSpacing / 2
-                        let waveOffset = sin(Double(i) * 0.3 + t * fluidSpeed * 1.5) * Double(r) * 0.02
-                        let lineY = baseY + waveOffset
-
-                        // Fade lines: stronger in middle, fade at edges
-                        let depth = (lineY - fluidTop) / (center.y + r - fluidTop)
-                        let alpha = 0.06 + depth * 0.08
-
-                        var linePath = Path()
-                        // Clip line to sphere width at this y position
-                        let dy = lineY - center.y
-                        let halfWidth = sqrt(max(0, r * r - dy * dy))
-                        linePath.move(to: CGPoint(x: center.x - halfWidth + 4, y: lineY))
-                        linePath.addLine(to: CGPoint(x: center.x + halfWidth - 4, y: lineY))
-
-                        fluidCtx.stroke(linePath, with: .color(.white.opacity(alpha)), lineWidth: 0.8)
-                    }
-
-                    // Subtle bright area near fluid surface
-                    let surfaceGlow = CGRect(x: center.x - r * 0.6, y: fluidTop - r * 0.05, width: r * 1.2, height: r * 0.2)
-                    fluidCtx.fill(Ellipse().path(in: surfaceGlow), with: .linearGradient(
-                        Gradient(colors: [Color(red: 0.4, green: 0.8, blue: 1.0).opacity(0.25), .clear]),
-                        startPoint: CGPoint(x: surfaceGlow.midX, y: surfaceGlow.minY),
-                        endPoint: CGPoint(x: surfaceGlow.midX, y: surfaceGlow.maxY)
-                    ))
+                    // Inner edge highlight
+                    let inner = CGRect(x: center.x - r + 3, y: center.y - r + 3, width: size - 6, height: size - 6)
+                    context.stroke(Circle().path(in: inner), with: .color(.white.opacity(0.08)), lineWidth: 1)
                 }
+                .frame(width: size, height: size)
 
-                // 3. Glass sphere edge
-                context.stroke(spherePath, with: .linearGradient(
-                    Gradient(colors: [
-                        .white.opacity(0.6),
-                        Color(red: 0.7, green: 0.85, blue: 1.0).opacity(0.35),
-                        Color(red: 0.75, green: 0.8, blue: 0.95).opacity(0.2),
-                        .white.opacity(0.3),
-                    ]),
-                    startPoint: CGPoint(x: center.x - r, y: center.y - r),
-                    endPoint: CGPoint(x: center.x + r, y: center.y + r)
-                ), lineWidth: 1.5)
+                // -- GLASS REFLECTIONS (SwiftUI overlays for quality) --
 
-                // 4. Specular highlight top-left
-                let specRect = CGRect(x: center.x - r * 0.4, y: center.y - r * 0.85, width: r * 0.7, height: r * 0.35)
-                context.fill(Ellipse().path(in: specRect), with: .linearGradient(
-                    Gradient(colors: [.white.opacity(0.5), .white.opacity(0)]),
-                    startPoint: CGPoint(x: specRect.midX, y: specRect.minY),
-                    endPoint: CGPoint(x: specRect.midX, y: specRect.maxY)
-                ))
+                // Large specular arc top-left
+                Ellipse()
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.55), .white.opacity(0.15), .clear],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: size * 0.55, height: size * 0.35)
+                    .offset(x: -size * 0.08, y: -size * 0.2)
+                    .blur(radius: 3)
 
                 // Small bright dot
-                let dotRect = CGRect(x: center.x - r * 0.35, y: center.y - r * 0.7, width: r * 0.1, height: r * 0.1)
-                context.fill(Circle().path(in: dotRect), with: .color(.white.opacity(0.4)))
+                Circle()
+                    .fill(.white.opacity(0.6))
+                    .frame(width: 6, height: 6)
+                    .offset(x: -size * 0.2, y: -size * 0.28)
+                    .blur(radius: 1)
 
-                // 5. Bottom reflection
-                let bottomRef = CGRect(x: center.x - r * 0.3, y: center.y + r * 0.7, width: r * 0.6, height: r * 0.12)
-                context.fill(Ellipse().path(in: bottomRef), with: .color(Color(red: 0.7, green: 0.85, blue: 1.0).opacity(0.15)))
+                // Edge refraction glow (bottom-right)
+                Ellipse()
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color(red: 0.7, green: 0.88, blue: 1.0).opacity(0.2)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: size * 0.5, height: size * 0.12)
+                    .offset(x: size * 0.05, y: size * 0.38)
+                    .blur(radius: 3)
+
+                // Rim light right edge
+                Circle()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [.clear, .clear, .white.opacity(0.12), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 3
+                    )
+                    .frame(width: size - 2, height: size - 2)
             }
-            .frame(width: size + 10, height: size + 10)
+            .frame(width: size + 20, height: size + 30)
         }
     }
 
-    // MARK: - Fluid Level (how full the sphere is)
-
     private func fluidLevel(t: Double, level: CGFloat) -> CGFloat {
-        // 0 = empty, 1 = full. Base ~0.65 with breathing + audio
         let base: CGFloat = switch state {
-        case .idle: 0.55
-        case .listening: 0.60
-        case .processing: 0.65
-        case .speaking: 0.60
+        case .idle: 0.5
+        case .listening: 0.55
+        case .processing: 0.6
+        case .speaking: 0.55
         }
-        let breath = CGFloat(sin(t * fluidSpeed * 0.6)) * 0.03
-        let audio = level * 0.08
+        let breath = CGFloat(sin(t * fluidSpeed * 0.5)) * 0.025
+        let audio = level * 0.06
         return base + breath + audio
     }
 
     private var fluidSpeed: Double {
         switch state {
-        case .idle: 0.5
-        case .listening: 1.2
-        case .processing: 1.8
-        case .speaking: 1.0
+        case .idle: 0.6
+        case .listening: 1.3
+        case .processing: 2.0
+        case .speaking: 1.1
         }
     }
 }
