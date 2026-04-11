@@ -32,7 +32,7 @@ struct ContentView: View {
         NavigationSplitView {
             sidebarContent
         } detail: {
-            DashboardView(dexcomManager: dexcomManager)
+            DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
         }
         .frame(minWidth: 700, minHeight: 500)
         .onAppear(perform: seedIfNeeded)
@@ -42,7 +42,7 @@ struct ContentView: View {
         #else
         TabView {
             NavigationStack {
-                DashboardView(dexcomManager: dexcomManager)
+                DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
                             Menu {
@@ -102,12 +102,14 @@ struct ContentView: View {
             Task(priority: .background) {
                 seedIfNeeded()
             }
-            Task {
-                try? await Task.sleep(for: .seconds(2))
+            // HealthKit auth + data fetch
+            Task(priority: .userInitiated) {
                 await healthKit.requestAuthorization()
+                await healthKit.fetchAll()
             }
+            // Dexcom
             if dexcomManager.isLoggedIn {
-                Task {
+                Task(priority: .userInitiated) {
                     await dexcomManager.fetchLatest()
                     dexcomManager.startAutoRefresh()
                     syncToWatch()
@@ -115,30 +117,30 @@ struct ContentView: View {
             } else {
                 syncToWatch()
             }
-            // Push sleep, meals, pump after HealthKit is ready
-            Task {
+            // Push data to backend (parallel, non-blocking with timeout)
+            Task(priority: .background) {
                 try? await Task.sleep(for: .seconds(3))
-                await healthKit.requestAuthorization()
-                await healthKit.fetchAll()
-                await pushSleepToBackend()
-                await pushMealsToBackend()
-                await pushPumpToBackend()
+                async let s: () = pushSleepToBackend()
+                async let m: () = pushMealsToBackend()
+                async let p: () = pushPumpToBackend()
+                _ = await (s, m, p)
             }
-            // Re-push meals/pump every 2 minutes so mid-session logs reach the watch
-            Task {
+            // Re-push meals/pump every 2 minutes
+            Task(priority: .background) {
                 try? await Task.sleep(for: .seconds(120))
                 while !Task.isCancelled {
                     await healthKit.fetchRecentMeals()
-                    await pushMealsToBackend()
-                    await pushPumpToBackend()
+                    async let m: () = pushMealsToBackend()
+                    async let p: () = pushPumpToBackend()
+                    _ = await (m, p)
                     try? await Task.sleep(for: .seconds(120))
                 }
             }
             // Notifications + medication reminders
-            Task {
+            Task(priority: .background) {
                 await notifications.requestAuthorization()
                 notifications.scheduleMealReminders()
-                let meds = await MedicationClient().fetchMedications()
+                let meds = await medicationClient.fetchMedications()
                 notifications.scheduleMedicationReminders(meds)
             }
         }
@@ -232,6 +234,7 @@ struct ContentView: View {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sleep/push") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         APIConfig.applyAuth(to: &request)
 
@@ -314,6 +317,7 @@ struct ContentView: View {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         APIConfig.applyAuth(to: &request)
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -325,6 +329,7 @@ struct ContentView: View {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/meals/push") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         APIConfig.applyAuth(to: &request)
         let mealsData = meals.map { m -> [String: Any] in
@@ -376,12 +381,12 @@ struct ContentView: View {
 
             List {
                 NavigationLink {
-                    DashboardView(dexcomManager: dexcomManager)
+                    DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
                 } label: {
                     Label("CGM", systemImage: "chart.line.uptrend.xyaxis")
                 }
                 NavigationLink {
-                    PumpView()
+                    PumpView(healthKit: healthKit)
                 } label: {
                     Label("Pump", systemImage: "cross.vial.fill")
                 }

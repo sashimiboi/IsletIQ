@@ -11,8 +11,13 @@ class AuthManager {
     var error: String?
 
     struct AuthResponse: Codable {
-        let token: String
-        let user_id: Int
+        let access_token: String
+        let token_type: String?
+        let user: AuthUser?
+    }
+
+    struct AuthUser: Codable {
+        let id: Int
         let email: String
         let name: String?
         let tier: String
@@ -46,10 +51,10 @@ class AuthManager {
 
             if httpResponse.statusCode == 200 {
                 let auth = try JSONDecoder().decode(AuthResponse.self, from: data)
-                APIConfig.authToken = auth.token
-                userName = auth.name ?? ""
-                userEmail = auth.email
-                userTier = auth.tier
+                APIConfig.authToken = auth.access_token
+                userName = auth.user?.name ?? ""
+                userEmail = auth.user?.email ?? ""
+                userTier = auth.user?.tier ?? "trial"
                 return true
             } else {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -82,10 +87,10 @@ class AuthManager {
 
             if httpResponse.statusCode == 200 {
                 let auth = try JSONDecoder().decode(AuthResponse.self, from: data)
-                APIConfig.authToken = auth.token
-                userName = auth.name ?? ""
-                userEmail = auth.email
-                userTier = auth.tier
+                APIConfig.authToken = auth.access_token
+                userName = auth.user?.name ?? ""
+                userEmail = auth.user?.email ?? ""
+                userTier = auth.user?.tier ?? "trial"
                 return true
             } else {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

@@ -14,6 +14,9 @@ final class VoiceSessionManager {
     var responseText = ""
     var errorMessage: String?
 
+    /// Called when a full exchange completes (user message + agent response)
+    var onExchange: ((String, String) -> Void)?
+
     // MARK: - Dependencies
 
     private var agentClient: AgentClient?
@@ -22,10 +25,10 @@ final class VoiceSessionManager {
     private var context: String?
     private let ttsClient = ElevenLabsClient()
 
-    // MARK: - Audio Engine (shared for mic + playback)
+    // MARK: - Audio
 
-    private let audioEngine = AVAudioEngine()
-    private let playerNode = AVAudioPlayerNode()
+    private var audioEngine: AVAudioEngine?
+    private var playerNode: AVAudioPlayerNode?
     private var recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
@@ -43,23 +46,16 @@ final class VoiceSessionManager {
     private var sentenceBuffer = ""
     private var sentenceQueue: [String] = []
     private var isPlayingAudio = false
-    private var playbackFormat: AVAudioFormat?
+    private var lastUserMessage = ""
+
+    private let playbackFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: 44100,
+        channels: 1,
+        interleaved: false
+    )!
 
     // MARK: - Lifecycle
-
-    init() {
-        audioEngine.attach(playerNode)
-        let mainMixer = audioEngine.mainMixerNode
-        playbackFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: 44100,
-            channels: 1,
-            interleaved: false
-        )
-        if let fmt = playbackFormat {
-            audioEngine.connect(playerNode, to: mainMixer, format: fmt)
-        }
-    }
 
     func startSession(
         agentClient: AgentClient,
@@ -87,29 +83,39 @@ final class VoiceSessionManager {
     func interruptSpeaking() {
         ttsTask?.cancel()
         ttsTask = nil
-        playerNode.stop()
+        stopPlayback()
         sentenceQueue.removeAll()
         sentenceBuffer = ""
         isPlayingAudio = false
+        // Save partial response
+        if !lastUserMessage.isEmpty && !responseText.isEmpty {
+            onExchange?(lastUserMessage, responseText)
+        }
         startListening()
     }
 
     // MARK: - Listening
 
     private func startListening() {
+        stopPlayback()
         stopRecognition()
+
         state = .listening
         currentTranscript = ""
         speechDetected = false
         silenceStart = nil
 
-        configureAudioSession()
+        // Fresh engine for recording
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
+
+        configureAudioSessionForRecording()
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let request = recognitionRequest else { return }
         request.shouldReportPartialResults = true
 
-        let inputNode = audioEngine.inputNode
+        let inputNode = engine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
@@ -125,7 +131,7 @@ final class VoiceSessionManager {
                 if let result {
                     self.currentTranscript = result.bestTranscription.formattedString
                     self.speechDetected = true
-                    self.silenceStart = nil // reset silence timer on new speech
+                    self.silenceStart = nil
                 }
                 if result?.isFinal == true {
                     self.onSpeechFinished()
@@ -136,15 +142,13 @@ final class VoiceSessionManager {
             }
         }
 
-        if !audioEngine.isRunning {
-            audioEngine.prepare()
-            do {
-                try audioEngine.start()
-            } catch {
-                print("[VoiceSession] Engine start error: \(error)")
-                self.errorMessage = "Microphone error"
-                self.state = .idle
-            }
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            print("[VoiceSession] Engine start error: \(error)")
+            self.errorMessage = "Microphone error"
+            self.state = .idle
         }
     }
 
@@ -158,13 +162,9 @@ final class VoiceSessionManager {
         let rms = sqrt(sum / Float(count))
         let db = 20 * log10(max(rms, 1e-7))
 
-        // Normalize to 0-1 range (roughly -60dB to -10dB range)
         let normalized = max(0, min(1, (db + 50) / 40))
-
-        // Smooth
         audioLevel = audioLevel * 0.7 + normalized * 0.3
 
-        // Silence detection
         if state == .listening && speechDetected {
             if db < silenceThreshold {
                 if silenceStart == nil {
@@ -179,28 +179,26 @@ final class VoiceSessionManager {
     }
 
     private func onSpeechFinished() {
-        guard state == .listening, !currentTranscript.isEmpty else {
-            if state == .listening && !speechDetected {
-                // No speech detected at all, keep listening
-                return
-            }
-            if state == .listening && currentTranscript.isEmpty {
+        guard state == .listening else { return }
+
+        if currentTranscript.isEmpty {
+            if speechDetected {
                 errorMessage = "Didn't catch that"
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     self?.errorMessage = nil
                 }
-                startListening()
-                return
             }
+            startListening()
             return
         }
 
         stopRecognition()
+        stopEngine()
         state = .processing
         audioLevel = 0
 
-        let transcript = currentTranscript
-        sendToBackend(transcript)
+        lastUserMessage = currentTranscript
+        sendToBackend(currentTranscript)
     }
 
     // MARK: - Backend Communication
@@ -225,7 +223,7 @@ final class VoiceSessionManager {
                     message: fullMessage,
                     agent: self.agentName,
                     sessionId: self.sessionId,
-                    context: nil // context already embedded in message
+                    context: nil
                 ) { [weak self] event in
                     Task { @MainActor [weak self] in
                         guard let self else { return }
@@ -261,16 +259,14 @@ final class VoiceSessionManager {
     private func bufferForTTS(_ text: String) {
         sentenceBuffer += text
 
-        // Split on sentence boundaries
         let terminators: [Character] = [".", "!", "?"]
         while let idx = sentenceBuffer.lastIndex(where: { terminators.contains($0) }) {
             let afterIdx = sentenceBuffer.index(after: idx)
-            // Only split if terminator is followed by space or is at end
             if afterIdx == sentenceBuffer.endIndex || sentenceBuffer[afterIdx] == " " {
-                let sentence = String(sentenceBuffer[...idx])
+                let sentence = String(sentenceBuffer[...idx]).trimmingCharacters(in: .whitespacesAndNewlines)
                 sentenceBuffer = String(sentenceBuffer[afterIdx...]).trimmingCharacters(in: .whitespaces)
-                if !sentence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    sentenceQueue.append(sentence.trimmingCharacters(in: .whitespacesAndNewlines))
+                if !sentence.isEmpty {
+                    sentenceQueue.append(sentence)
                     if !isPlayingAudio {
                         playNextSentence()
                     }
@@ -291,7 +287,6 @@ final class VoiceSessionManager {
         if !isPlayingAudio && !sentenceQueue.isEmpty {
             playNextSentence()
         } else if !isPlayingAudio && sentenceQueue.isEmpty {
-            // Response complete, no more audio to play
             onAllAudioComplete()
         }
     }
@@ -317,7 +312,6 @@ final class VoiceSessionManager {
                     if Task.isCancelled { return }
                     allPCMData.append(chunk)
 
-                    // Calculate playback audio level from PCM
                     await MainActor.run { [weak self] in
                         self?.updatePlaybackLevel(from: chunk)
                     }
@@ -325,14 +319,13 @@ final class VoiceSessionManager {
 
                 if Task.isCancelled { return }
 
-                // Schedule the complete audio buffer for playback
                 await MainActor.run { [weak self] in
                     self?.scheduleAndPlay(pcmData: allPCMData)
                 }
             } catch {
+                print("[VoiceSession] TTS error: \(error)")
                 await MainActor.run { [weak self] in
                     guard let self else { return }
-                    // TTS failed - skip to next sentence or finish
                     self.isPlayingAudio = false
                     if !self.sentenceQueue.isEmpty {
                         self.playNextSentence()
@@ -345,12 +338,27 @@ final class VoiceSessionManager {
     }
 
     private func scheduleAndPlay(pcmData: Data) {
-        guard let format = playbackFormat else { return }
+        let sampleCount = pcmData.count / 2
+        guard sampleCount > 0 else {
+            isPlayingAudio = false
+            if !sentenceQueue.isEmpty {
+                playNextSentence()
+            } else {
+                onAllAudioComplete()
+            }
+            return
+        }
 
-        // Convert 16-bit PCM to float32 for AVAudioPlayerNode
-        let sampleCount = pcmData.count / 2 // 16-bit = 2 bytes per sample
-        guard sampleCount > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(sampleCount))
+        // Set up fresh engine for playback
+        configureAudioSessionForPlayback()
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+        self.audioEngine = engine
+        self.playerNode = player
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: AVAudioFrameCount(sampleCount))
         else { return }
 
         buffer.frameLength = AVAudioFrameCount(sampleCount)
@@ -363,22 +371,23 @@ final class VoiceSessionManager {
             }
         }
 
-        // Ensure engine is running for playback
-        if !audioEngine.isRunning {
-            configureAudioSession()
-            audioEngine.prepare()
-            try? audioEngine.start()
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            print("[VoiceSession] Playback engine error: \(error)")
+            isPlayingAudio = false
+            onAllAudioComplete()
+            return
         }
 
-        playerNode.scheduleBuffer(buffer) { [weak self] in
+        player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // Buffer finished playing
                 if !self.sentenceQueue.isEmpty {
                     self.playNextSentence()
                 } else {
                     self.isPlayingAudio = false
-                    // Check if there's more text buffering
                     if self.sentenceBuffer.isEmpty {
                         self.onAllAudioComplete()
                     }
@@ -386,9 +395,7 @@ final class VoiceSessionManager {
             }
         }
 
-        if !playerNode.isPlaying {
-            playerNode.play()
-        }
+        player.play()
     }
 
     private func updatePlaybackLevel(from chunk: Data) {
@@ -403,46 +410,70 @@ final class VoiceSessionManager {
             }
         }
         let rms = sqrt(sum / Float(max(sampleCount, 1)))
-        let normalized = min(1, rms * 4) // scale up for visibility
+        let normalized = min(1, rms * 4)
         audioLevel = audioLevel * 0.6 + normalized * 0.4
     }
 
     private func onAllAudioComplete() {
         audioLevel = 0
-        // Auto-continue conversation
+        // Save the exchange to chat
+        if !lastUserMessage.isEmpty && !responseText.isEmpty {
+            onExchange?(lastUserMessage, responseText)
+        }
+        // Auto-continue
         startListening()
     }
 
     // MARK: - Audio Session
 
-    private func configureAudioSession() {
+    private func configureAudioSessionForRecording() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
-            print("[VoiceSession] Audio session error: \(error)")
+            print("[VoiceSession] Record session error: \(error)")
+        }
+    }
+
+    private func configureAudioSessionForPlayback() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+        } catch {
+            print("[VoiceSession] Playback session error: \(error)")
         }
     }
 
     // MARK: - Cleanup
 
     private func stopRecognition() {
-        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine?.inputNode.removeTap(onBus: 0)
         recognitionRequest?.endAudio()
         recognitionRequest = nil
         recognitionTask?.cancel()
         recognitionTask = nil
     }
 
+    private func stopPlayback() {
+        playerNode?.stop()
+        playerNode = nil
+    }
+
+    private func stopEngine() {
+        if audioEngine?.isRunning == true {
+            audioEngine?.stop()
+        }
+        audioEngine = nil
+    }
+
     private func stopEverything() {
         ttsTask?.cancel()
         ttsTask = nil
-        playerNode.stop()
+        stopPlayback()
         stopRecognition()
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
+        stopEngine()
         sentenceQueue.removeAll()
         sentenceBuffer = ""
         isPlayingAudio = false

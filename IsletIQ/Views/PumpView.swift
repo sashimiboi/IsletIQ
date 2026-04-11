@@ -1,16 +1,29 @@
 import SwiftUI
 
 struct PumpView: View {
+    var healthKit: HealthKitManager?
+    @State private var backendPump: BackendPumpData?
+    @State private var isLoading = true
+
+    struct BackendPumpData {
+        let basalRate: Double
+        let lastBolus: Double
+        let totalBasal: Double
+        let totalBolus: Double
+        let dailyTotal: Double
+        let source: String
+        let recentBoluses: [(units: Double, carbs: Int, timestamp: Date)]
+    }
+
+    // Omnipod 5 does not write to HealthKit — always use backend (Glooko data)
+    private var useHealthKit: Bool { false }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                // Device header
                 deviceCard
-                // Delivery
                 deliveryCard
-                // Reservoir
                 reservoirCard
-                // Recent boluses
                 bolusHistoryCard
             }
             .padding(.horizontal, 16)
@@ -22,7 +35,46 @@ struct PumpView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.large)
         #endif
+        .task { await loadBackendFallback() }
     }
+
+    private func loadBackendFallback() async {
+        defer { isLoading = false }
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/pump/latest") else { return }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let boluses = (json["recentBoluses"] as? [[String: Any]])?.map { b in
+                    (units: (b["units"] as? NSNumber)?.doubleValue ?? 0,
+                     carbs: (b["carbs"] as? NSNumber)?.intValue ?? 0,
+                     timestamp: Date(timeIntervalSince1970: (b["timestamp"] as? NSNumber)?.doubleValue ?? 0))
+                } ?? []
+                await MainActor.run {
+                    backendPump = BackendPumpData(
+                        basalRate: (json["basalRate"] as? NSNumber)?.doubleValue ?? 0,
+                        lastBolus: (json["lastBolus"] as? NSNumber)?.doubleValue ?? 0,
+                        totalBasal: (json["totalBasal"] as? NSNumber)?.doubleValue ?? 0,
+                        totalBolus: (json["totalBolus"] as? NSNumber)?.doubleValue ?? 0,
+                        dailyTotal: (json["dailyTotal"] as? NSNumber)?.doubleValue ?? 0,
+                        source: json["source"] as? String ?? "healthkit",
+                        recentBoluses: boluses
+                    )
+                }
+            }
+        } catch {}
+    }
+
+    // MARK: - Computed props (HealthKit first, backend fallback)
+
+    private var basalRate: Double { useHealthKit ? (healthKit?.basalRateEstimate ?? 0) : (backendPump?.basalRate ?? 0) }
+    private var lastBolusUnits: Double { useHealthKit ? (healthKit?.lastBolusUnits ?? 0) : (backendPump?.lastBolus ?? 0) }
+    private var dailyTotal: Double { useHealthKit ? (healthKit?.totalBasalToday ?? 0) + (healthKit?.totalBolusToday ?? 0) : (backendPump?.dailyTotal ?? 0) }
+    private var dataSource: String { useHealthKit ? "HealthKit" : (backendPump?.source ?? "—") }
+
+    // MARK: - Cards
 
     private var deviceCard: some View {
         HStack(spacing: 14) {
@@ -36,29 +88,18 @@ struct PumpView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(MockData.pumpModel)
+                Text("Omnipod 5")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                 HStack(spacing: 6) {
-                    Circle().fill(Theme.normal).frame(width: 6, height: 6)
-                    Text("Connected")
+                    Circle().fill(hasData ? Theme.normal : Theme.textTertiary).frame(width: 6, height: 6)
+                    Text(hasData ? "Data from \(dataSource)" : (isLoading ? "Loading..." : "No data"))
                         .font(.caption)
                         .foregroundStyle(Theme.textSecondary)
                 }
             }
 
             Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                HStack(spacing: 4) {
-                    Image(systemName: "battery.75")
-                        .font(.caption)
-                        .foregroundStyle(Theme.normal)
-                    Text("\(MockData.pumpBattery)%")
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .foregroundStyle(Theme.textSecondary)
-                }
-            }
         }
         .padding(20)
         .card()
@@ -71,11 +112,11 @@ struct PumpView: View {
                 .foregroundStyle(Theme.textPrimary)
 
             HStack(spacing: 0) {
-                DeliveryItem(label: "Basal Rate", value: "\(MockData.activeBasalRate) u/hr", icon: "waveform.path", color: Theme.primary)
+                DeliveryItem(label: "Basal Rate", value: "\(String(format: "%.2f", basalRate)) u/hr", icon: "waveform.path", color: Theme.primary)
                 Divider().frame(height: 40).padding(.horizontal, 8)
-                DeliveryItem(label: "IOB", value: String(format: "%.1f u", MockData.iob), icon: "drop.fill", color: Theme.teal)
+                DeliveryItem(label: "Last Bolus", value: String(format: "%.1f u", lastBolusUnits), icon: "drop.fill", color: Theme.teal)
                 Divider().frame(height: 40).padding(.horizontal, 8)
-                DeliveryItem(label: "Daily Total", value: "18.2 u", icon: "chart.bar.fill", color: Theme.primary)
+                DeliveryItem(label: "Daily Total", value: String(format: "%.1f u", dailyTotal), icon: "chart.bar.fill", color: Theme.primary)
             }
         }
         .padding(20)
@@ -83,37 +124,39 @@ struct PumpView: View {
     }
 
     private var reservoirCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Reservoir")
+        let maxUnits = 200.0
+        let remaining = max(0, maxUnits - dailyTotal)
+        let daysLeft = dailyTotal > 0 ? remaining / dailyTotal : 0
+
+        return VStack(alignment: .leading, spacing: 14) {
+            Text("Reservoir (estimated)")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.textPrimary)
 
             HStack(spacing: 16) {
-                // Progress ring
                 ZStack {
                     Circle()
                         .stroke(Theme.border, lineWidth: 6)
                         .frame(width: 60, height: 60)
                     Circle()
-                        .trim(from: 0, to: MockData.reservoirUnits / MockData.reservoirMax)
+                        .trim(from: 0, to: remaining / maxUnits)
                         .stroke(Theme.teal, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                         .frame(width: 60, height: 60)
                         .rotationEffect(.degrees(-90))
-                    Text("\(Int(MockData.reservoirUnits))")
+                    Text("\(Int(remaining))")
                         .font(.callout.weight(.bold).monospacedDigit())
                         .foregroundStyle(Theme.textPrimary)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(Int(MockData.reservoirUnits)) of \(Int(MockData.reservoirMax)) units")
+                    Text("~\(Int(remaining)) of \(Int(maxUnits)) units")
                         .font(.subheadline.weight(.medium))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Est. ~2.8 days remaining")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textSecondary)
-                    Text("Last changed 4 days ago")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textTertiary)
+                    if daysLeft > 0 {
+                        Text("Est. ~\(String(format: "%.1f", daysLeft)) days remaining")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                 }
 
                 Spacer()
@@ -124,36 +167,49 @@ struct PumpView: View {
     }
 
     private var bolusHistoryCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let hkBoluses = healthKit?.recentBoluses.prefix(6).map { b in
+            (units: b.units, carbs: 0, timestamp: b.date)
+        } ?? []
+        let boluses = useHealthKit ? Array(hkBoluses) : (backendPump?.recentBoluses.prefix(6).map { $0 } ?? [])
+
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Recent Boluses")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Theme.textPrimary)
 
-            ForEach(mockBoluses, id: \.time) { bolus in
-                HStack {
-                    Image(systemName: "syringe.fill")
-                        .font(.caption)
-                        .foregroundStyle(Theme.teal)
-                        .frame(width: 16)
-                    Text(String(format: "%.1f u", bolus.units))
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Theme.textPrimary)
-                    if !bolus.type.isEmpty {
-                        Text(bolus.type)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(Theme.primary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Theme.primary.opacity(0.08), in: Capsule())
+            if boluses.isEmpty && !isLoading {
+                Text("No boluses available")
+                    .font(.caption)
+                    .foregroundStyle(Theme.textTertiary)
+                    .padding(.vertical, 8)
+            } else if isLoading && boluses.isEmpty {
+                ProgressView()
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(Array(boluses.enumerated()), id: \.offset) { i, bolus in
+                    HStack {
+                        Image(systemName: "syringe.fill")
+                            .font(.caption)
+                            .foregroundStyle(Theme.teal)
+                            .frame(width: 16)
+                        Text(String(format: "%.1f u", bolus.units))
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .foregroundStyle(Theme.textPrimary)
+                        if bolus.carbs > 0 {
+                            Text("\(bolus.carbs)g")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(Theme.primary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Theme.primary.opacity(0.08), in: Capsule())
+                        }
+                        Spacer()
+                        Text(bolus.timestamp, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
                     }
-                    Spacer()
-                    Text(bolus.time)
-                        .font(.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .padding(.vertical, 3)
-                if bolus.time != mockBoluses.last?.time {
-                    Divider()
+                    .padding(.vertical, 3)
+                    if i < boluses.count - 1 { Divider() }
                 }
             }
         }
@@ -161,14 +217,7 @@ struct PumpView: View {
         .card()
     }
 
-    private var mockBoluses: [(units: Double, type: String, time: String)] {
-        [
-            (3.5, "Meal", "1h 30m ago"),
-            (1.2, "Correction", "4h ago"),
-            (4.0, "Meal", "7h ago"),
-            (0.8, "Correction", "10h ago"),
-        ]
-    }
+    private var hasData: Bool { dailyTotal > 0 || backendPump != nil }
 }
 
 struct DeliveryItem: View {
@@ -190,11 +239,5 @@ struct DeliveryItem: View {
                 .foregroundStyle(Theme.textTertiary)
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-#Preview {
-    NavigationStack {
-        PumpView()
     }
 }

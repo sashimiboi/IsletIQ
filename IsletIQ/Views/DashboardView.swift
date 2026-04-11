@@ -21,7 +21,7 @@ enum ChartRange: String, CaseIterable {
     case day = "24h"
     case threeDays = "3d"
     case week = "7d"
-    case month = "30d"
+    case fourteenDays = "14d"
 
     var seconds: TimeInterval {
         switch self {
@@ -29,21 +29,30 @@ enum ChartRange: String, CaseIterable {
         case .day: 86400
         case .threeDays: 3 * 86400
         case .week: 7 * 86400
-        case .month: 30 * 86400
+        case .fourteenDays: 14 * 86400
         }
     }
 }
 
 struct DashboardView: View {
-    @Query(sort: \GlucoseReading.timestamp, order: .reverse) var storedReadings: [GlucoseReading]
+    @Query var storedReadings: [GlucoseReading]
     var dexcomManager: DexcomManager?
+    var healthKit: HealthKitManager?
 
-    init(dexcomManager: DexcomManager? = nil) {
+    init(dexcomManager: DexcomManager? = nil, healthKit: HealthKitManager? = nil) {
         self.dexcomManager = dexcomManager
+        self.healthKit = healthKit
+        // Only fetch last 14 days to keep the dashboard fast
+        let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: .now)!
+        _storedReadings = Query(
+            filter: #Predicate<GlucoseReading> { $0.timestamp >= cutoff },
+            sort: \.timestamp,
+            order: .reverse
+        )
     }
     @State private var chartRange: ChartRange = .day
     @State private var chartMode: ChartMode = .trend
-    @State private var agpRange: ChartRange = .week
+    @State private var agpRange: ChartRange = .fourteenDays
     @State private var recentMode: RecentMode = .cgm
 
     enum RecentMode: String, CaseIterable {
@@ -221,7 +230,7 @@ struct DashboardView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
                 Spacer()
-                Text(MockData.pumpModel)
+                Text("Omnipod 5")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Theme.primary)
                     .padding(.horizontal, 10)
@@ -230,23 +239,11 @@ struct DashboardView: View {
             }
 
             HStack(spacing: 20) {
-                PumpStat(icon: "waveform.path", label: "Basal", value: "\(MockData.activeBasalRate) u/hr")
+                PumpStat(icon: "waveform.path", label: "Basal", value: "\(String(format: "%.2f", healthKit?.basalRateEstimate ?? 0)) u/hr")
                 Divider().frame(height: 32)
-                PumpStat(icon: "syringe.fill", label: "Last Bolus", value: "\(MockData.lastBolus)u")
+                PumpStat(icon: "syringe.fill", label: "Last Bolus", value: "\(String(format: "%.1f", healthKit?.lastBolusUnits ?? 0))u")
                 Divider().frame(height: 32)
-                PumpStat(icon: "cylinder.fill", label: "Reservoir", value: "\(Int(MockData.reservoirUnits))u")
-            }
-
-            HStack(spacing: 16) {
-                HStack(spacing: 6) {
-                    Image(systemName: "battery.75")
-                        .foregroundStyle(Theme.normal)
-                        .font(.caption)
-                    Text("\(MockData.pumpBattery)%")
-                        .font(.caption.weight(.medium).monospacedDigit())
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Spacer()
+                PumpStat(icon: "chart.bar.fill", label: "Daily Total", value: "\(String(format: "%.1f", (healthKit?.totalBasalToday ?? 0) + (healthKit?.totalBolusToday ?? 0)))u")
             }
         }
         .padding(20)
@@ -257,7 +254,15 @@ struct DashboardView: View {
 
     private var rangeReadings: [ReadingPoint] {
         let cutoff = Date().addingTimeInterval(-chartRange.seconds)
-        return allReadings.filter { $0.timestamp >= cutoff }
+        let filtered = allReadings.filter { $0.timestamp >= cutoff }
+        // Downsample for chart performance: max ~350 points (one per pixel on a typical screen)
+        return downsample(filtered, maxPoints: 350)
+    }
+
+    private func downsample(_ points: [ReadingPoint], maxPoints: Int) -> [ReadingPoint] {
+        guard points.count > maxPoints else { return points }
+        let step = Double(points.count) / Double(maxPoints)
+        return stride(from: 0, to: Double(points.count), by: step).map { points[Int($0)] }
     }
 
     private var bolusPointsForRange: [BolusPoint] {
@@ -325,22 +330,16 @@ struct DashboardView: View {
                         .buttonStyle(.plain)
                     }
                 } else {
-                    ForEach(ChartRange.allCases, id: \.self) { range in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { agpRange = range }
-                        } label: {
-                            Text(range.rawValue)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(agpRange == range ? .white : Theme.textSecondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    agpRange == range ? Theme.primary.opacity(0.7) : Theme.muted,
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    // AGP standard: fixed 14-day reporting period per clinical guidelines
+                    Text("14 days")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(
+                            Theme.primary.opacity(0.7),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
                 }
                 Spacer()
             }
@@ -349,7 +348,7 @@ struct DashboardView: View {
 
             if chartMode == .agp {
                 // AGP uses stored readings filtered by selected range
-                AGPChartView(readings: allReadings, agpRange: agpRange)
+                AGPChartView(readings: downsample(allReadings, maxPoints: 500), agpRange: agpRange)
                     .frame(height: 200)
 
                 HStack(spacing: 10) {

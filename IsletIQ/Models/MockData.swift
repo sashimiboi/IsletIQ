@@ -2,9 +2,14 @@ import Foundation
 
 struct MockData {
 
+    // Cache parsed data so we don't re-parse CSV on every access
+    private static var _cachedReadings: [GlucoseReading]?
+    private static var _cachedBolus: [GlookoImporter.BolusRow]?
+
     // MARK: - Load real Glooko data
 
     static func glucoseReadings() -> [GlucoseReading] {
+        if let cached = _cachedReadings { return cached }
         guard let url = Bundle.main.url(forResource: "cgm_data", withExtension: "csv"),
               let csv = try? String(contentsOf: url, encoding: .utf8)
         else {
@@ -30,14 +35,18 @@ struct MockData {
                 source: .cgm
             ))
         }
+        _cachedReadings = readings
         return readings
     }
 
     static func bolusData() -> [GlookoImporter.BolusRow] {
+        if let cached = _cachedBolus { return cached }
         guard let url = Bundle.main.url(forResource: "bolus_data", withExtension: "csv"),
               let csv = try? String(contentsOf: url, encoding: .utf8)
         else { return [] }
-        return GlookoImporter.parseBolus(from: csv)
+        let data = GlookoImporter.parseBolus(from: csv)
+        _cachedBolus = data
+        return data
     }
 
     static func insulinSummary() -> [GlookoImporter.InsulinDayRow] {

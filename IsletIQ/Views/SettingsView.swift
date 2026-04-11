@@ -223,6 +223,9 @@ struct GeneralSettingsContent: View {
 struct DevicesSettingsContent: View {
     @State var dexcomManager: DexcomManager
     @State private var showDexcomLogin = false
+    @State private var showLibreLogin = false
+    @State private var showNightscoutLogin = false
+    @State private var showTidepoolLogin = false
 
     var body: some View {
         // Dexcom G7 — real connection
@@ -333,50 +336,114 @@ struct DevicesSettingsContent: View {
             DexcomLoginView(dexcomManager: dexcomManager)
         }
 
+        // FreeStyle Libre (LibreLink Up)
+        DeviceIntegrationCard(
+            name: "FreeStyle Libre",
+            icon: "waveform.path",
+            description: "Connect via LibreLink Up to get Libre 2/3 CGM data",
+            status: KeychainHelper.load(key: "libre_token") != nil ? "Connected" : "Available",
+            statusColor: KeychainHelper.load(key: "libre_token") != nil ? Theme.normal : Theme.teal,
+            onConnect: { showLibreLogin = true }
+        )
+        .sheet(isPresented: $showLibreLogin) { LibreLinkLoginView() }
+
+        // Nightscout
+        DeviceIntegrationCard(
+            name: "Nightscout",
+            icon: "cloud.fill",
+            description: "Connect to your Nightscout instance for CGM, treatments, and profile data",
+            status: KeychainHelper.load(key: "nightscout_url") != nil ? "Connected" : "Available",
+            statusColor: KeychainHelper.load(key: "nightscout_url") != nil ? Theme.normal : Theme.teal,
+            onConnect: { showNightscoutLogin = true }
+        )
+        .sheet(isPresented: $showNightscoutLogin) { NightscoutLoginView() }
+
+        // Tidepool
+        DeviceIntegrationCard(
+            name: "Tidepool",
+            icon: "drop.triangle.fill",
+            description: "Sync CGM, pump, and BGM data from Tidepool",
+            status: KeychainHelper.load(key: "tidepool_token") != nil ? "Connected" : "Available",
+            statusColor: KeychainHelper.load(key: "tidepool_token") != nil ? Theme.normal : Theme.teal,
+            onConnect: { showTidepoolLogin = true }
+        )
+        .sheet(isPresented: $showTidepoolLogin) { TidepoolLoginView() }
+
         // Omnipod 5
+        DeviceIntegrationCard(
+            name: "Omnipod 5",
+            icon: "circle.hexagongrid.fill",
+            description: "Pump data via HealthKit (automatic when Omnipod app is installed)",
+            status: "HealthKit",
+            statusColor: Theme.normal
+        )
+
+        // Tandem t:slim
+        DeviceIntegrationCard(
+            name: "Tandem t:slim X2 / Mobi",
+            icon: "rectangle.connected.to.line.below",
+            description: "Pump data via t:connect or Tidepool integration",
+            status: "Via Tidepool",
+            statusColor: Theme.textTertiary,
+            onConnect: { showTidepoolLogin = true }
+        )
+
+        // Medtronic
+        DeviceIntegrationCard(
+            name: "Medtronic 780G / 770G",
+            icon: "waveform.badge.plus",
+            description: "CGM and pump data via CareLink or Tidepool",
+            status: "Via Tidepool",
+            statusColor: Theme.textTertiary,
+            onConnect: { showTidepoolLogin = true }
+        )
+    }
+}
+
+struct DeviceIntegrationCard: View {
+    let name: String
+    let icon: String
+    let description: String
+    let status: String
+    let statusColor: Color
+    var onConnect: (() -> Void)? = nil
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Omnipod 5")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Theme.textPrimary)
+            HStack {
+                Text(name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Spacer()
+                Text(status)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(statusColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
 
             HStack(spacing: 12) {
-                Image(systemName: "circle.hexagongrid.fill")
+                Image(systemName: icon)
                     .font(.title3)
                     .foregroundStyle(Theme.textTertiary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Omnipod 5 API")
-                        .font(.caption.weight(.medium))
+                    Text(description)
+                        .font(.caption)
                         .foregroundStyle(Theme.textSecondary)
-                    Text("Coming soon - Insulet API integration")
-                        .font(.caption2)
-                        .foregroundStyle(Theme.textTertiary)
                 }
                 Spacer()
-                Text("Soon")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Theme.teal)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Theme.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-        }
-        .padding(20)
-        .card()
-
-        // Bluetooth
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Bluetooth")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(Theme.textPrimary)
-
-            HStack {
-                Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(Theme.teal)
-                Text("Scanning for nearby devices...")
-                    .font(.caption)
-                    .foregroundStyle(Theme.textSecondary)
-                Spacer()
-                ProgressView().scaleEffect(0.7)
+                if let onConnect {
+                    Button(action: onConnect) {
+                        Text(status == "Connected" ? "Settings" : "Connect")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Theme.primary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(20)
@@ -736,7 +803,9 @@ struct EvalsContent: View {
     private func fetchSessions() async {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sessions?limit=20") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            APIConfig.applyAuth(to: &request)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let items = json["sessions"] as? [[String: Any]] {
                 sessions = items.compactMap { s in
@@ -776,17 +845,17 @@ struct MetricsContent: View {
     private let client = ObservabilityClient()
 
     var body: some View {
-        let totalRequests = metrics["total_requests"] as? Int ?? 0
-        let avgLatency = metrics["avg_latency_ms"] as? Double ?? 0
-        let successRate = metrics["success_rate"] as? Double ?? 0
-        let totalTools = metrics["total_tool_calls"] as? Int ?? 0
-        let agentBreakdown = metrics["requests_by_agent"] as? [String: Int] ?? [:]
-        let toolUsage = metrics["tool_usage"] as? [String: Int] ?? [:]
+        let totalRequests = (metrics["total_requests"] as? NSNumber)?.intValue ?? 0
+        let avgLatency = (metrics["avg_latency_ms"] as? NSNumber)?.doubleValue ?? 0
+        let successRate = (metrics["success_rate"] as? NSNumber)?.doubleValue ?? 0
+        let totalTools = (metrics["total_tool_calls"] as? NSNumber)?.intValue ?? 0
+        let agentBreakdown = (metrics["requests_by_agent"] as? [String: NSNumber])?.mapValues(\.intValue) ?? [:]
+        let toolUsage = (metrics["tool_usage"] as? [String: NSNumber])?.mapValues(\.intValue) ?? [:]
 
         // Cost data
-        let totalInputTokens = metrics["total_input_tokens"] as? Int ?? 0
-        let totalOutputTokens = metrics["total_output_tokens"] as? Int ?? 0
-        let totalCost = metrics["total_cost_usd"] as? Double ?? 0
+        let totalInputTokens = (metrics["total_input_tokens"] as? NSNumber)?.intValue ?? 0
+        let totalOutputTokens = (metrics["total_output_tokens"] as? NSNumber)?.intValue ?? 0
+        let totalCost = (metrics["total_cost_usd"] as? NSNumber)?.doubleValue ?? 0
         let costByModel = metrics["cost_by_model"] as? [String: Any] ?? [:]
 
         // Session filter
@@ -856,14 +925,14 @@ struct MetricsContent: View {
             // Cost by model breakdown
             if !costByModel.isEmpty {
                 Divider()
-                let models = costByModel.sorted { ($0.value as? Double ?? 0) > ($1.value as? Double ?? 0) }
+                let models = costByModel.sorted { ($0.value as? NSNumber)?.doubleValue ?? 0 > ($1.value as? NSNumber)?.doubleValue ?? 0 }
                 ForEach(models, id: \.key) { model, cost in
                     HStack {
                         Text(model)
                             .font(.caption.weight(.medium))
                             .foregroundStyle(Theme.textPrimary)
                         Spacer()
-                        Text(String(format: "$%.4f", cost as? Double ?? 0))
+                        Text(String(format: "$%.4f", (cost as? NSNumber)?.doubleValue ?? 0))
                             .font(.caption.weight(.semibold).monospacedDigit())
                             .foregroundStyle(Theme.teal)
                     }
@@ -963,7 +1032,9 @@ struct MetricsContent: View {
     private func fetchSessions() async {
         guard let url = URL(string: "\(APIConfig.baseURL)/api/sessions?limit=20") else { return }
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            APIConfig.applyAuth(to: &request)
+            let (data, _) = try await URLSession.shared.data(for: request)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                let items = json["sessions"] as? [[String: Any]] {
                 sessions = items.compactMap { s in

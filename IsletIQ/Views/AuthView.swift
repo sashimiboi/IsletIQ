@@ -24,7 +24,7 @@ struct AuthView: View {
                     Text("IsletIQ")
                         .font(.title.weight(.bold))
                         .foregroundStyle(Theme.textPrimary)
-                    Text("Type 1 Diabetes Management")
+                    Text("Diabetes Insights")
                         .font(.subheadline)
                         .foregroundStyle(Theme.textSecondary)
                 }

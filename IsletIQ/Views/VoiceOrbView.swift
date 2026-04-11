@@ -12,7 +12,7 @@ struct VoiceOrbView: View {
     let state: VoiceState
     let audioLevel: Float
 
-    private let baseSize: CGFloat = 120
+    private let baseSize: CGFloat = 100
 
     var body: some View {
         TimelineView(.animation) { timeline in
@@ -20,143 +20,164 @@ struct VoiceOrbView: View {
             let level = CGFloat(audioLevel)
 
             ZStack {
-                // Outer glow ring 2
+                // Soft outer halo
                 Circle()
-                    .fill(glowGradient.opacity(0.08))
-                    .frame(width: baseSize + 80, height: baseSize + 80)
-                    .scaleEffect(outerScale2(t: t, level: level))
-                    .blur(radius: 30)
+                    .fill(haloGradient)
+                    .frame(width: baseSize + 90, height: baseSize + 90)
+                    .scaleEffect(outerScale(t: t, level: level, phase: 1.5))
+                    .opacity(state == .idle ? 0.3 : 0.5)
+                    .blur(radius: 40)
 
-                // Outer glow ring 1
+                // Mid glow ring
                 Circle()
-                    .fill(glowGradient.opacity(0.15))
-                    .frame(width: baseSize + 50, height: baseSize + 50)
-                    .scaleEffect(outerScale1(t: t, level: level))
-                    .blur(radius: 20)
+                    .fill(midGradient)
+                    .frame(width: baseSize + 55, height: baseSize + 55)
+                    .scaleEffect(outerScale(t: t, level: level, phase: 1.0))
+                    .opacity(0.4)
+                    .blur(radius: 25)
 
                 // Inner glow
                 Circle()
-                    .fill(coreGradient)
-                    .frame(width: baseSize + 20, height: baseSize + 20)
-                    .scaleEffect(innerScale(t: t, level: level))
-                    .blur(radius: 12)
-                    .opacity(0.6)
+                    .fill(innerGradient)
+                    .frame(width: baseSize + 25, height: baseSize + 25)
+                    .scaleEffect(coreScale(t: t, level: level) * 1.05)
+                    .opacity(0.5)
+                    .blur(radius: 14)
 
                 // Core sphere
                 Circle()
                     .fill(coreGradient)
                     .frame(width: baseSize, height: baseSize)
                     .scaleEffect(coreScale(t: t, level: level))
-                    .blur(radius: 4)
-                    .shadow(color: glowColor.opacity(0.4), radius: 20)
+                    .shadow(color: shadowColor.opacity(0.25), radius: 24, y: 4)
 
-                // Bright center dot
-                Circle()
-                    .fill(.white.opacity(0.3))
-                    .frame(width: baseSize * 0.3, height: baseSize * 0.3)
-                    .blur(radius: 8)
+                // Specular highlight
+                Ellipse()
+                    .fill(
+                        LinearGradient(
+                            colors: [.white.opacity(0.5), .white.opacity(0)],
+                            startPoint: .top,
+                            endPoint: .center
+                        )
+                    )
+                    .frame(width: baseSize * 0.55, height: baseSize * 0.35)
+                    .offset(y: -baseSize * 0.15)
                     .scaleEffect(coreScale(t: t, level: level))
+                    .blur(radius: 4)
             }
-            .rotationEffect(.degrees(state == .processing ? t.truncatingRemainder(dividingBy: 10) * 36 : 0))
+            .rotationEffect(.degrees(state == .processing ? t.truncatingRemainder(dividingBy: 12) * 30 : 0))
         }
-        .animation(.easeInOut(duration: 0.3), value: state)
+        .animation(.easeInOut(duration: 0.4), value: state)
     }
 
-    // MARK: - Scale Functions
+    // MARK: - Scale
 
     private func coreScale(t: Double, level: CGFloat) -> CGFloat {
-        let breath = sin(t * breathSpeed) * breathAmplitude
-        let audio = level * audioAmplitude
+        let breath = sin(t * breathSpeed) * breathAmp
+        let audio = level * audioAmp
         return 1.0 + breath + audio
     }
 
-    private func innerScale(t: Double, level: CGFloat) -> CGFloat {
-        let breath = sin(t * breathSpeed + 0.5) * breathAmplitude * 1.2
-        let audio = level * audioAmplitude * 1.3
+    private func outerScale(t: Double, level: CGFloat, phase: Double) -> CGFloat {
+        let breath = sin(t * breathSpeed + phase) * breathAmp * 1.6
+        let audio = level * audioAmp * 2.0
         return 1.0 + breath + audio
     }
 
-    private func outerScale1(t: Double, level: CGFloat) -> CGFloat {
-        let breath = sin(t * breathSpeed + 1.0) * breathAmplitude * 1.5
-        let audio = level * audioAmplitude * 1.8
-        return 1.0 + breath + audio
-    }
-
-    private func outerScale2(t: Double, level: CGFloat) -> CGFloat {
-        let breath = sin(t * breathSpeed + 1.5) * breathAmplitude * 1.8
-        let audio = level * audioAmplitude * 2.2
-        return 1.0 + breath + audio
-    }
-
-    // MARK: - State-dependent Parameters
+    // MARK: - State Parameters
 
     private var breathSpeed: Double {
         switch state {
-        case .idle: 1.2
-        case .listening: 2.0
-        case .processing: 3.0
-        case .speaking: 2.0
+        case .idle: 1.0
+        case .listening: 1.8
+        case .processing: 2.5
+        case .speaking: 1.8
         }
     }
 
-    private var breathAmplitude: CGFloat {
+    private var breathAmp: CGFloat {
         switch state {
-        case .idle: 0.03
-        case .listening: 0.02
-        case .processing: 0.05
-        case .speaking: 0.02
+        case .idle: 0.025
+        case .listening: 0.015
+        case .processing: 0.04
+        case .speaking: 0.015
         }
     }
 
-    private var audioAmplitude: CGFloat {
+    private var audioAmp: CGFloat {
         switch state {
         case .idle: 0.0
-        case .listening: 0.15
+        case .listening: 0.12
         case .processing: 0.0
-        case .speaking: 0.12
+        case .speaking: 0.10
         }
     }
 
-    private var glowColor: Color {
-        switch state {
-        case .idle: Theme.primary
-        case .listening: Theme.accent
-        case .processing: Theme.primary
-        case .speaking: Theme.accent
-        }
-    }
+    // MARK: - Colors
 
+    // Deep blue core: brand primary to accent
     private var coreGradient: RadialGradient {
+        let center: Color = {
+            switch state {
+            case .idle: return Color(red: 0.2, green: 0.45, blue: 0.85)     // soft blue
+            case .listening: return Color(red: 0.25, green: 0.55, blue: 0.95) // brighter blue
+            case .processing: return Color(red: 0.15, green: 0.35, blue: 0.75) // deeper
+            case .speaking: return Color(red: 0.3, green: 0.6, blue: 0.95)   // vibrant
+            }
+        }()
+        return RadialGradient(
+            colors: [center, Theme.primary, Theme.primaryDark],
+            center: .center,
+            startRadius: 8,
+            endRadius: baseSize * 0.55
+        )
+    }
+
+    private var innerGradient: RadialGradient {
         RadialGradient(
             colors: [
-                state == .speaking || state == .listening ? Theme.accent : Theme.primary.opacity(0.8),
-                Theme.primary,
-                Theme.primaryDark,
+                state == .speaking ? Theme.accent.opacity(0.6) : Theme.primary.opacity(0.5),
+                Theme.primary.opacity(0),
             ],
             center: .center,
-            startRadius: 5,
-            endRadius: baseSize * 0.6
+            startRadius: 10,
+            endRadius: baseSize * 0.7
         )
     }
 
-    private var glowGradient: RadialGradient {
+    private var midGradient: RadialGradient {
         RadialGradient(
-            colors: [glowColor, glowColor.opacity(0)],
+            colors: [Theme.primary.opacity(0.3), Theme.primary.opacity(0)],
             center: .center,
-            startRadius: 10,
-            endRadius: baseSize
+            startRadius: 15,
+            endRadius: baseSize * 0.9
         )
+    }
+
+    private var haloGradient: RadialGradient {
+        let color = state == .listening || state == .speaking ? Theme.accent : Theme.primary
+        return RadialGradient(
+            colors: [color.opacity(0.25), color.opacity(0)],
+            center: .center,
+            startRadius: 20,
+            endRadius: baseSize * 1.1
+        )
+    }
+
+    private var shadowColor: Color {
+        Theme.primary
     }
 }
 
 #Preview {
     ZStack {
-        Color(red: 0.04, green: 0.05, blue: 0.1).ignoresSafeArea()
+        Theme.bg.ignoresSafeArea()
         VStack(spacing: 40) {
             VoiceOrbView(state: .listening, audioLevel: 0.5)
-            Text("Listening...").foregroundStyle(.white.opacity(0.6))
+            Text("Listening...")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.textSecondary)
         }
     }
-    .preferredColorScheme(.dark)
 }
 #endif

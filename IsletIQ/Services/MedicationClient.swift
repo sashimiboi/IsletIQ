@@ -9,10 +9,13 @@ actor MedicationClient {
 
     func fetchMedications() async -> [Medication] {
         guard let url = URL(string: "\(baseURL)/api/medications") else { return [] }
+        guard APIConfig.authToken != nil else { return [] }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 10
         APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 401 { return [] }
             struct Wrapper: Codable { let medications: [Medication] }
             let wrapper = try JSONDecoder().decode(Wrapper.self, from: data)
             return wrapper.medications
@@ -24,10 +27,13 @@ actor MedicationClient {
 
     func fetchTodaySchedule() async -> [TodayMedication] {
         guard let url = URL(string: "\(baseURL)/api/medications/today") else { return [] }
+        guard APIConfig.authToken != nil else { return [] }
         var request = URLRequest(url: url)
+        request.timeoutInterval = 10
         APIConfig.applyAuth(to: &request)
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, http.statusCode == 401 { return [] }
             struct Wrapper: Codable { let medications: [TodayMedication] }
             let wrapper = try JSONDecoder().decode(Wrapper.self, from: data)
             return wrapper.medications

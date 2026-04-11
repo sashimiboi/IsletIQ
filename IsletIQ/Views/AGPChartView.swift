@@ -14,20 +14,24 @@ struct AGPBand {
 /// Ambulatory Glucose Profile - Glooko-style clinical design
 struct AGPChartView: View {
     let readings: [ReadingPoint]
-    var agpRange: ChartRange = .week
+    var agpRange: ChartRange = .fourteenDays
 
     @State private var selectedSlot: Int? = nil
     @State private var zoomScale: CGFloat = 1.0
     @State private var lastZoomScale: CGFloat = 1.0
-
-    private var filteredReadings: [ReadingPoint] {
-        let cutoff = Date().addingTimeInterval(-agpRange.seconds)
-        return readings.filter { $0.timestamp >= cutoff }
-    }
+    @State private var cachedBands: [AGPBand]?
 
     private var bands: [AGPBand] {
+        if let cached = cachedBands { return cached }
+        return computeBands()
+    }
+
+    private func computeBands() -> [AGPBand] {
+        let cutoff = Date().addingTimeInterval(-agpRange.seconds)
+        let filtered = readings.filter { $0.timestamp >= cutoff }
+
         var slots: [Int: [Int]] = [:]
-        for r in filteredReadings {
+        for r in filtered {
             let cal = Calendar.current
             let hour = cal.component(.hour, from: r.timestamp)
             let minute = cal.component(.minute, from: r.timestamp)
@@ -136,6 +140,7 @@ struct AGPChartView: View {
                 .frame(height: 18)
             }
         }
+        .onAppear { cachedBands = computeBands() }
     }
 
     private func agpContent(baseWidth: CGFloat, h: CGFloat) -> some View {

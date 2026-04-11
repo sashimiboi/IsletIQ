@@ -1,5 +1,113 @@
 import Foundation
 import WatchConnectivity
+import UserNotifications
+
+// MARK: - Watch Notification Manager
+
+@Observable
+class WatchNotificationManager {
+    static let shared = WatchNotificationManager()
+    var isAuthorized = false
+
+    private let center = UNUserNotificationCenter.current()
+    private static let throttleKey = "w_notif_throttle"
+    private static let throttleInterval: TimeInterval = 3600
+
+    private init() {}
+
+    private func shouldFire(id: String) -> Bool {
+        let defaults = UserDefaults.standard
+        let throttle = defaults.dictionary(forKey: Self.throttleKey) as? [String: Double] ?? [:]
+        if let lastFire = throttle[id], Date().timeIntervalSince1970 - lastFire < Self.throttleInterval {
+            return false
+        }
+        return true
+    }
+
+    private func markFired(id: String) {
+        let defaults = UserDefaults.standard
+        var throttle = defaults.dictionary(forKey: Self.throttleKey) as? [String: Double] ?? [:]
+        throttle[id] = Date().timeIntervalSince1970
+        let cutoff = Date().timeIntervalSince1970 - 86400
+        throttle = throttle.filter { $0.value > cutoff }
+        defaults.set(throttle, forKey: Self.throttleKey)
+    }
+
+    func requestAuthorization() async {
+        do {
+            let granted = try await center.requestAuthorization(options: [.alert, .sound])
+            await MainActor.run { isAuthorized = granted }
+        } catch {
+            print("[watch-notif] Auth error: \(error)")
+        }
+    }
+
+    func checkGlucose(value: Int, trend: String) {
+        guard isAuthorized, value > 0 else { return }
+
+        if value < 55 {
+            send(id: "cgm-urgent-low", title: "\(value) mg/dL",
+                 body: "Urgent low. Take 15g fast carbs now.", critical: true)
+        } else if value < 70 {
+            send(id: "cgm-low", title: "\(value) mg/dL",
+                 body: "Low glucose. Consider 15g carbs.")
+        } else if value > 300 {
+            send(id: "cgm-urgent-high", title: "\(value) mg/dL",
+                 body: "Urgent high. Check ketones, consider correction.", critical: true)
+        } else if value > 250 {
+            send(id: "cgm-high", title: "\(value) mg/dL",
+                 body: "High glucose. Consider a correction dose.")
+        }
+
+        if (trend == "FortyFiveDown" || trend == "SingleDown" || trend == "DoubleDown") && value < 120 {
+            send(id: "cgm-falling", title: "Dropping Fast - \(value)",
+                 body: "Glucose falling rapidly. Eat carbs soon.")
+        }
+    }
+
+    func checkSupplies(_ supplies: [(name: String, quantity: Int, daysLeft: Int, urgent: Bool)]) {
+        guard isAuthorized else { return }
+        for supply in supplies {
+            if supply.quantity == 0 {
+                send(id: "supply-out-\(supply.name)", title: "Out of \(supply.name)",
+                     body: "Reorder immediately.", critical: true)
+            } else if supply.urgent {
+                send(id: "supply-low-\(supply.name)", title: "Low: \(supply.name)",
+                     body: "\(supply.quantity) left (~\(supply.daysLeft) days). Reorder soon.")
+            }
+        }
+    }
+
+    func checkPump(reservoir: Double, battery: Int) {
+        guard isAuthorized else { return }
+        if reservoir > 0 && reservoir < 20 {
+            send(id: "pump-reservoir-low", title: "Low Reservoir - \(Int(reservoir))u",
+                 body: "Prepare a new pod.")
+        }
+        if battery > 0 && battery < 15 {
+            send(id: "pump-battery-low", title: "Pump Battery Low - \(battery)%",
+                 body: "Charge or replace soon.")
+        }
+    }
+
+    private func send(id: String, title: String, body: String, critical: Bool = false) {
+        guard shouldFire(id: id) else { return }
+        markFired(id: id)
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = critical ? .defaultCritical : .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+        center.add(request) { error in
+            if let error { print("[watch-notif] Error: \(error)") }
+        }
+    }
+}
+
+// MARK: - Watch Connectivity Manager
 
 @Observable
 class WatchConnectivityManager: NSObject {
@@ -32,6 +140,9 @@ class WatchConnectivityManager: NSObject {
     // Meals
     var recentMeals: [(name: String, carbs: Int, calories: Int)] = []
 
+    // Medications
+    var medications: [(name: String, dosage: String, time: String, taken: Bool)] = []
+
     // Pump
     var basalRate: Double = 0
     var lastBolus: Double = 0
@@ -41,6 +152,7 @@ class WatchConnectivityManager: NSObject {
     var recentBoluses: [(units: Double, carbs: Int, timestamp: Double)] = []
 
     private let apiBase = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+    private let notifications = WatchNotificationManager.shared
 
     private override init() {
         super.init()
@@ -52,7 +164,10 @@ class WatchConnectivityManager: NSObject {
         }
 
         loadCached()
-        Task { await fetchAll() }
+        Task {
+            await notifications.requestAuthorization()
+            await fetchAll()
+        }
         startPeriodicRefresh()
     }
 
@@ -79,6 +194,7 @@ class WatchConnectivityManager: NSObject {
         await fetchMeals()
         await fetchPump()
         await fetchSupplies()
+        await fetchMedications()
         await fetchMetrics()
     }
 
@@ -100,6 +216,7 @@ class WatchConnectivityManager: NSObject {
                              timestamp: b["timestamp"] as? Double ?? 0)
                         }
                     }
+                    notifications.checkPump(reservoir: reservoir, battery: pumpBattery)
                     print("[watch] Pump loaded: \(pumpModel), reservoir \(Int(reservoir))u")
                 }
             }
@@ -125,6 +242,33 @@ class WatchConnectivityManager: NSObject {
             }
         } catch {
             print("[watch] Meals fetch: \(error.localizedDescription)")
+        }
+    }
+
+    private func fetchMedications() async {
+        guard let url = URL(string: "\(apiBase)/api/medications/public") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let meds = json["medications"] as? [[String: Any]] {
+                await MainActor.run {
+                    var result: [(name: String, dosage: String, time: String, taken: Bool)] = []
+                    for m in meds {
+                        let name = m["name"] as? String ?? ""
+                        let dosage = m["dosage"] as? String ?? ""
+                        let times = m["schedule_times"] as? [String] ?? []
+                        let doses = m["doses"] as? [[String: Any]] ?? []
+                        let takenTimes = Set(doses.compactMap { $0["scheduled_time"] as? String })
+                        for time in times {
+                            result.append((name: name, dosage: dosage, time: time, taken: takenTimes.contains(time)))
+                        }
+                    }
+                    medications = result
+                    print("[watch] Medications loaded: \(medications.count)")
+                }
+            }
+        } catch {
+            print("[watch] Medications fetch: \(error.localizedDescription)")
         }
     }
 
@@ -175,6 +319,7 @@ class WatchConnectivityManager: NSObject {
                     readingCount = json["readingCount"] as? Int ?? 0
                     lastUpdate = Date()
                     saveToCache()
+                    notifications.checkGlucose(value: currentGlucose, trend: trend)
                     print("[watch] CGM loaded: \(currentGlucose) mg/dL, \(readingCount) readings")
                 }
             } else {
@@ -186,7 +331,7 @@ class WatchConnectivityManager: NSObject {
     }
 
     private func fetchSupplies() async {
-        guard let url = URL(string: "\(apiBase)/api/supplies") else { return }
+        guard let url = URL(string: "\(apiBase)/api/supplies/public") else { return }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -201,6 +346,7 @@ class WatchConnectivityManager: NSObject {
                                 urgent: qty <= 3)
                     }
                     saveToCache()
+                    notifications.checkSupplies(supplies)
                     print("[watch] Supplies loaded: \(supplies.count)")
                 }
             }
@@ -304,6 +450,8 @@ extension WatchConnectivityManager: WCSessionDelegate {
         }
 
         saveToCache()
+        notifications.checkGlucose(value: currentGlucose, trend: trend)
+        if !supplies.isEmpty { notifications.checkSupplies(supplies) }
         print("[watch] Received WC data: glucose=\(currentGlucose)")
     }
 }

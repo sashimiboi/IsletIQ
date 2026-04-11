@@ -190,6 +190,43 @@ class NotificationManager {
         center.removePendingNotificationRequests(withIdentifiers: ["meal-breakfast", "meal-lunch", "meal-dinner"])
     }
 
+    // MARK: - Medication Reminders
+
+    func scheduleMedicationReminders(_ medications: [Medication]) {
+        guard isAuthorized else { return }
+
+        // Remove existing medication reminders
+        center.getPendingNotificationRequests { requests in
+            let medIds = requests.filter { $0.identifier.hasPrefix("med-") }.map(\.identifier)
+            self.center.removePendingNotificationRequests(withIdentifiers: medIds)
+        }
+
+        for med in medications where med.isActive {
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+
+            for time in med.scheduleTimes {
+                guard let date = formatter.date(from: time) else { continue }
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+
+                scheduleDailyReminder(
+                    id: "med-\(med.id)-\(time)",
+                    title: "Take \(med.name)",
+                    body: med.dosage.isEmpty ? "Time for your medication" : "\(med.dosage) — tap to log",
+                    hour: components.hour ?? 8,
+                    minute: components.minute ?? 0
+                )
+            }
+        }
+    }
+
+    func cancelMedicationReminders() {
+        center.getPendingNotificationRequests { requests in
+            let medIds = requests.filter { $0.identifier.hasPrefix("med-") }.map(\.identifier)
+            self.center.removePendingNotificationRequests(withIdentifiers: medIds)
+        }
+    }
+
     // MARK: - Helpers
 
     private func sendImmediate(id: String, title: String, body: String, category: String, sound: UNNotificationSound = .default) {

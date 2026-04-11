@@ -2,9 +2,10 @@ import Foundation
 
 enum APIConfig {
     // AWS ECS Fargate + ALB (stable URL)
-    static let cloudURL = "https://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+    // TODO: Switch to HTTPS once ACM certificate + domain is configured
+    static let cloudURL = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
     // Local dev fallback
-    static let macIP = "192.168.1.87"
+    static let macIP = "192.168.1.65"
 
     // Auth token
     static var authToken: String? {

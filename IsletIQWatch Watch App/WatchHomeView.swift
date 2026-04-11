@@ -12,6 +12,7 @@ struct WatchHomeView: View {
                     statsRow
                     sparklineCard
                     pumpCard
+                    medicationsCard
                     sleepCard
                     recentReadingsCard
                     recentMealsCard
@@ -243,6 +244,54 @@ struct WatchHomeView: View {
                         Spacer()
                         Text(Date(timeIntervalSince1970: bolus.timestamp), format: .dateTime.hour().minute())
                             .font(.system(size: 8).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Medications Card
+
+    private var medicationsCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "pills.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.indigo)
+                Text("Medications")
+                    .font(.caption2.weight(.semibold))
+                Spacer()
+                let taken = connectivity.medications.filter(\.taken).count
+                let total = connectivity.medications.count
+                if total > 0 {
+                    Text("\(taken)/\(total)")
+                        .font(.system(size: 9).weight(.bold).monospacedDigit())
+                        .foregroundStyle(taken == total ? .green : .indigo)
+                }
+            }
+
+            if connectivity.medications.isEmpty {
+                Text("No medications")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(Array(connectivity.medications.prefix(6).enumerated()), id: \.offset) { _, med in
+                    HStack(spacing: 6) {
+                        Image(systemName: med.taken ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 9))
+                            .foregroundStyle(med.taken ? .green : .secondary)
+                        Text(med.name)
+                            .font(.system(size: 10))
+                            .foregroundStyle(med.taken ? .secondary : .primary)
+                            .lineLimit(1)
+                            .strikethrough(med.taken)
+                        Spacer()
+                        Text(med.time)
+                            .font(.system(size: 9).monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
                 }

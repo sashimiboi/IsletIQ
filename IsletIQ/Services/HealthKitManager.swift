@@ -65,6 +65,20 @@ final class HealthKitManager {
     var weeklyCals: [(date: Date, cals: Double)] = []
     var activeCaloriesToday: Double = 0
 
+    // Insulin data from HealthKit (Omnipod writes here)
+    struct InsulinEntry: Identifiable {
+        let id = UUID()
+        let units: Double
+        let isBasal: Bool
+        let date: Date
+    }
+    var recentBoluses: [InsulinEntry] = []
+    var totalBasalToday: Double = 0
+    var totalBolusToday: Double = 0
+    var basalRateEstimate: Double = 0  // estimated u/hr from today's delivery
+    var lastBolusUnits: Double = 0
+    var lastBolusTime: Date?
+
     // Types we need
     private let shareTypes: Set<HKSampleType> = [
         HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
@@ -112,6 +126,16 @@ final class HealthKitManager {
     // MARK: - Log Meal
 
     func logMeal(name: String, calories: Double, carbs: Double, protein: Double, fat: Double) async {
+        // Skip if a meal with the same name was already logged today (prevents agent re-logging)
+        let alreadyLogged = recentMeals.contains { existing in
+            existing.name.lowercased() == name.lowercased() &&
+            Calendar.current.isDateInToday(existing.date)
+        }
+        if alreadyLogged {
+            print("HealthKit: skipping \(name) - already logged today")
+            return
+        }
+
         // Bounds checking: no negative values, max 10000 kcal / 2000g macros
         let calories = min(max(calories, 0), 10000)
         let carbs = min(max(carbs, 0), 2000)
@@ -255,12 +279,12 @@ final class HealthKitManager {
                     return MealEntry(id: sample.uuid, name: name, carbs: carbs, calories: matchedCals, date: sample.startDate, sample: sample)
                 }
 
-                // Deduplicate: if two entries share the same name and are within 60s, keep only the first
+                // Deduplicate: if two entries share the same name on the same day, keep only the earliest
                 var deduped: [MealEntry] = []
                 for meal in meals {
                     let isDupe = deduped.contains { existing in
                         existing.name == meal.name &&
-                        abs(existing.date.timeIntervalSince(meal.date)) < 60
+                        Calendar.current.isDate(existing.date, inSameDayAs: meal.date)
                     }
                     if !isDupe { deduped.append(meal) }
                 }
@@ -305,26 +329,43 @@ final class HealthKitManager {
                 sortDescriptors: [sortDescriptor]
             ) { _, samples, _ in
                 guard let samples = samples as? [HKCategorySample], !samples.isEmpty else {
+                    print("[Sleep] No samples returned from HealthKit for \(date)")
                     Task { @MainActor in self.lastSleep = nil }
                     continuation.resume()
                     return
                 }
 
-                // Prefer a single source for consistency (SleepWatch > Apple Watch > any)
-                // Group samples by source bundle ID and pick the one with the most data
+                // Debug: log what HealthKit returned
+                let srcCounts = Dictionary(grouping: samples, by: { $0.sourceRevision.source.bundleIdentifier })
+                    .mapValues { $0.count }
+                print("[Sleep] \(samples.count) total samples from sources: \(srcCounts)")
+                let valueCounts = Dictionary(grouping: samples, by: { $0.value }).mapValues { $0.count }
+                print("[Sleep] By type: \(valueCounts) (0=inBed, 1=asleepUnspecified, 2=awake, 3=core, 4=deep, 5=REM)")
+
+                // Filter out inBed samples first, keep only actual sleep stages
+                let allStages = samples.filter { $0.value != HKCategoryValueSleepAnalysis.inBed.rawValue }
+                print("[Sleep] \(allStages.count) sleep stage samples after removing inBed")
+
+                // Pick one source for consistency (avoid double-counting overlapping sources)
+                // Select based on sleep stage sample count, not total (inBed inflates Apple Watch count)
                 var bySource: [String: [HKCategorySample]] = [:]
-                for s in samples {
+                for s in allStages {
                     let src = s.sourceRevision.source.bundleIdentifier
                     bySource[src, default: []].append(s)
                 }
-                // Prefer SleepWatch if present, else pick source with most samples
-                let preferred = bySource.first(where: { $0.key.contains("sleepwatch") || $0.key.contains("SleepWatch") })?.value
-                    ?? bySource.max(by: { $0.value.count < $1.value.count })?.value
-                    ?? Array(samples)
-
-                // Filter to sleep stage samples (skip inBed)
-                let sleepSamples = preferred.filter { $0.value != HKCategoryValueSleepAnalysis.inBed.rawValue }
-                    .sorted { $0.startDate < $1.startDate }
+                let stageSrcCounts = bySource.mapValues { $0.count }
+                print("[Sleep] Stage samples by source: \(stageSrcCounts)")
+                let sleepSamples: [HKCategorySample]
+                if let sw = bySource.first(where: { $0.key.localizedCaseInsensitiveContains("sleepwatch") })?.value {
+                    print("[Sleep] Using SleepWatch source (\(sw.count) stages)")
+                    sleepSamples = sw.sorted { $0.startDate < $1.startDate }
+                } else if let best = bySource.max(by: { $0.value.count < $1.value.count }) {
+                    print("[Sleep] Using source \(best.key) (\(best.value.count) stages)")
+                    sleepSamples = best.value.sorted { $0.startDate < $1.startDate }
+                } else {
+                    print("[Sleep] Using all sources combined")
+                    sleepSamples = allStages.sorted { $0.startDate < $1.startDate }
+                }
 
                 // Group into sessions based on time gaps > 1 hour
                 var sessions: [[HKCategorySample]] = []
@@ -345,15 +386,22 @@ final class HealthKitManager {
                 }
                 if !currentSession.isEmpty { sessions.append(currentSession) }
 
-                // Find the most recent session >= 2 hours
-                guard let nightSession = sessions.last(where: { session in
+                // Prefer session whose wake time falls on the selected day
+                // Fall back to most recent session >= 2 hours, then any session
+                let sessionForDay = sessions.last(where: { session in
+                    guard let last = session.last else { return false }
+                    return Calendar.current.isDate(last.endDate, inSameDayAs: date)
+                })
+                let longSession = sessions.last(where: { session in
                     let totalMin = session.reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) / 60.0 }
                     return totalMin >= 120
-                }) ?? sessions.last else {
+                })
+                guard let nightSession = sessionForDay ?? longSession ?? sessions.last else {
                     Task { @MainActor in self.lastSleep = nil }
                     continuation.resume()
                     return
                 }
+                print("[Sleep] Picked session: \(sessionForDay != nil ? "day-match" : longSession != nil ? "long" : "last"), \(nightSession.count) samples")
 
                 // Deduplicate overlapping time ranges (multiple sources can write the same period)
                 // Walk through sorted segments and merge/skip overlaps
@@ -410,6 +458,8 @@ final class HealthKitManager {
                 // (sleep from 11pm Mon → 7am Tue belongs to Tuesday)
                 let wakeOnSelectedDay = Calendar.current.isDate(latest, inSameDayAs: date)
                 // For today, also accept sleep that ended within the last 12 hours
+                print("[Sleep] Sessions: \(sessions.count), selected \(nightSession.count) samples, bed=\(earliest), wake=\(latest)")
+                print("[Sleep] totalSleep=\(Int(totalSleep))min, date=\(date), wakeOnDay=\(wakeOnSelectedDay)")
                 let isRecent = Calendar.current.isDateInToday(date) && abs(latest.timeIntervalSinceNow) < 43200
 
                 if totalSleep > 0 && (wakeOnSelectedDay || isRecent) {
@@ -600,6 +650,56 @@ final class HealthKitManager {
         await fetchRecentMeals(for: date)
         await fetchLastSleep(for: date)
         await fetchActivityToday(for: date)
+        await fetchInsulinToday(for: date)
+    }
+
+    // MARK: - Insulin (Omnipod → HealthKit)
+
+    func fetchInsulinToday(for date: Date = .now) async {
+        guard let insulinType = HKQuantityType.quantityType(forIdentifier: .insulinDelivery) else { return }
+        let startOfDay = Calendar.current.startOfDay(for: date)
+        let predicate = HKQuery.predicateForSamples(withStart: startOfDay, end: date, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)
+
+        let samples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: insulinType,
+                predicate: predicate,
+                limit: 100,
+                sortDescriptors: [sortDesc]
+            ) { _, results, _ in
+                continuation.resume(returning: (results as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(query)
+        }
+
+        var boluses: [InsulinEntry] = []
+        var basalTotal = 0.0
+        var bolusTotal = 0.0
+
+        for sample in samples {
+            let units = sample.quantity.doubleValue(for: .internationalUnit())
+            let reason = sample.metadata?[HKMetadataKeyInsulinDeliveryReason] as? Int
+            let isBasal = reason == HKInsulinDeliveryReason.basal.rawValue
+            if isBasal {
+                basalTotal += units
+            } else {
+                bolusTotal += units
+                boluses.append(InsulinEntry(units: units, isBasal: false, date: sample.startDate))
+            }
+        }
+
+        let hoursElapsed = max(1, date.timeIntervalSince(startOfDay) / 3600.0)
+
+        await MainActor.run {
+            self.recentBoluses = boluses
+            self.totalBasalToday = basalTotal
+            self.totalBolusToday = bolusTotal
+            self.basalRateEstimate = round((basalTotal / hoursElapsed) * 100) / 100
+            self.lastBolusUnits = boluses.first?.units ?? 0
+            self.lastBolusTime = boluses.first?.date
+            print("[HealthKit] Insulin: \(boluses.count) boluses, \(String(format: "%.1f", basalTotal))u basal, \(String(format: "%.1f", bolusTotal))u bolus")
+        }
     }
 
     // MARK: - Observe New Food Entries
