@@ -182,10 +182,21 @@ struct VoiceSessionView: View {
             }
         }
         .onAppear {
-            KeychainHelper.save(
-                key: "elevenlabs_api_key",
-                value: "sk_f8eaa97b9e640f16f22b2e567396ff33c96997a81a249c0f"
-            )
+            // ElevenLabs API key should be set via Settings or backend config
+            if KeychainHelper.load(key: "elevenlabs_api_key") == nil {
+                // Fallback: set from server config on first voice mode use
+                Task {
+                    if let url = URL(string: "\(APIConfig.baseURL)/api/config/tts-key") {
+                        var req = URLRequest(url: url)
+                        APIConfig.applyAuth(to: &req)
+                        if let (data, _) = try? await URLSession.shared.data(for: req),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                           let key = json["key"] {
+                            KeychainHelper.save(key: "elevenlabs_api_key", value: key)
+                        }
+                    }
+                }
+            }
             manager.onExchange = onExchange
             manager.startSession(
                 agentClient: agentClient,

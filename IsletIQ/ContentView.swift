@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var healthKit = HealthKitManager()
     @State private var notifications = NotificationManager()
     @State private var isAuthenticated = APIConfig.authToken != nil
+    @State private var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
     private let watchSync = WatchSyncManager.shared
     private let medicationClient = MedicationClient()
 
@@ -27,6 +28,10 @@ struct ContentView: View {
             AuthView {
                 isAuthenticated = true
             }
+        } else if !hasCompletedOnboarding {
+            #if os(iOS)
+            FirstLaunchView(isComplete: $hasCompletedOnboarding)
+            #endif
         } else {
         #if os(macOS)
         NavigationSplitView {

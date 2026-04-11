@@ -205,6 +205,73 @@ struct GeneralSettingsContent: View {
         }
         .card()
 
+        // Legal & Privacy
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Legal")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+
+            SettingRow(icon: "doc.text", label: "Privacy Policy") {
+                Button {
+                    if let url = URL(string: "https://isletiq.com/privacy") {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            Divider().padding(.leading, 52)
+            SettingRow(icon: "doc.plaintext", label: "Terms of Service") {
+                Button {
+                    if let url = URL(string: "https://isletiq.com/terms") {
+                        UIApplication.shared.open(url)
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+        }
+        .card()
+
+        // Account
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Account")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
+                .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
+
+            SettingRow(icon: "rectangle.portrait.and.arrow.right", label: "Log Out") {
+                Button("Log Out") {
+                    AuthManager().logout()
+                    APIConfig.authToken = nil
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.elevated)
+            }
+            Divider().padding(.leading, 52)
+            SettingRow(icon: "trash", label: "Delete Account") {
+                Button("Delete") {
+                    showDeleteConfirmation = true
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.high)
+            }
+        }
+        .card()
+        .alert("Delete Account", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete Everything", role: .destructive) {
+                Task { await deleteAccount() }
+            }
+        } message: {
+            Text("This will permanently delete your account and all data on our servers. Health data in Apple Health will not be affected. This cannot be undone.")
+        }
+
         // About
         VStack(alignment: .leading, spacing: 0) {
             HStack {
@@ -215,6 +282,23 @@ struct GeneralSettingsContent: View {
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
         .card()
+    }
+
+    @State private var showDeleteConfirmation = false
+
+    private func deleteAccount() async {
+        guard let url = URL(string: "\(APIConfig.baseURL)/auth/delete-account") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        APIConfig.applyAuth(to: &request)
+        _ = try? await URLSession.shared.data(for: request)
+        // Clear all local data
+        APIConfig.authToken = nil
+        KeychainHelper.delete(key: "elevenlabs_api_key")
+        KeychainHelper.delete(key: "dexcom_session")
+        UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
+        UserDefaults.standard.removeObject(forKey: "auth_token")
+        UserDefaults.standard.removeObject(forKey: "elevenlabs_voice_id")
     }
 }
 
