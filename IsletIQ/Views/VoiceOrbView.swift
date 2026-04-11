@@ -96,9 +96,9 @@ class OrbRenderer: NSObject, MTKViewDelegate {
             0 // padding
         )
 
-        // IsletIQ brand colors (blue tones)
-        let c1 = SIMD3<Float>(0.35, 0.62, 0.95)  // bright blue
-        let c2 = SIMD3<Float>(0.15, 0.38, 0.78)  // deeper blue
+        // Soft pastel blue/lavender (matches ElevenLabs aesthetic)
+        let c1 = SIMD3<Float>(0.69, 0.78, 0.95)  // soft periwinkle #B0C7F2
+        let c2 = SIMD3<Float>(0.55, 0.65, 0.85)  // muted blue #8CA6D9
         uniforms.color1 = SIMD2(c1.x, c1.y)
         uniforms.color1b = SIMD2(c1.z, 0)
         uniforms.color2 = SIMD2(c2.x, c2.y)

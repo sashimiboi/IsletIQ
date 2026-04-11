@@ -43,8 +43,8 @@ bool drawOval(float2 polarUv, float2 polarCenter, float a, float b, bool reverse
     float edge = smoothstep(1.0, 1.0 - softness, oval);
     if (edge > 0.0) {
         float gradient = reverseGrad ? (1.0 - (p.x / a + 1.0) / 2.0) : ((p.x / a + 1.0) / 2.0);
-        gradient = mix(0.5, gradient, 0.1);
-        color = float4(float3(gradient), 0.85 * edge);
+        gradient = mix(0.5, gradient, 0.25);
+        color = float4(float3(gradient), 0.7 * edge);
         return true;
     }
     return false;
@@ -78,7 +78,7 @@ fragment float4 orbFragment(
     float n1 = perlinTex.sample(s, float2(u.animation * -0.2 + radius * 0.03, decomposed.x)).r;
     float n2 = perlinTex.sample(s, float2(u.animation * -0.2 + radius * 0.03, decomposed.y)).r;
     float noise = mix(n1, n2, decomposed.z) - 0.5;
-    theta += noise * mix(0.08, 0.25, u.outputVolume);
+    theta += noise * mix(0.35, 0.7, u.outputVolume);
 
     float4 color = float4(1.0, 1.0, 1.0, 1.0);
 
@@ -90,8 +90,8 @@ fragment float4 orbFragment(
 
     for (int i = 0; i < 7; i++) {
         float pn = perlinTex.sample(s, float2(fmod(centers[i] + u.time * 0.05, 1.0), 0.5)).r;
-        float a = 0.5 + pn * 0.3;
-        float b = pn * mix(3.5, 2.5, u.inputVolume);
+        float a = 0.6 + pn * 0.4;  // wider ovals
+        float b = pn * mix(4.0, 3.0, u.inputVolume);  // taller
         bool rev = (i % 2 == 1);
 
         float distTheta = min(abs(theta - centers[i]),
@@ -99,7 +99,7 @@ fragment float4 orbFragment(
                                  abs(theta - 2.0 * M_PI_F - centers[i])));
 
         float4 ovalColor;
-        if (drawOval(float2(distTheta, radius), float2(0, 0), a, b, rev, 0.6, ovalColor)) {
+        if (drawOval(float2(distTheta, radius), float2(0, 0), a, b, rev, 0.8, ovalColor)) {  // softer edges
             color.rgb = mix(color.rgb, ovalColor.rgb, ovalColor.a);
             color.a = max(color.a, ovalColor.a);
         }
