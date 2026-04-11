@@ -2,11 +2,10 @@
 import Foundation
 
 actor ElevenLabsClient {
-    // Flash v2.5 for lowest latency (~75ms inference)
     private let modelId = "eleven_flash_v2_5"
     // Rachel - clear, professional female voice
     private let voiceId = "21m00Tcm4TlvDq8ikWAM"
-    private let outputFormat = "pcm_44100"
+    private let outputFormat = "mp3_44100_128"
 
     private var apiKey: String {
         KeychainHelper.load(key: "elevenlabs_api_key") ?? ""
@@ -16,9 +15,14 @@ actor ElevenLabsClient {
         !apiKey.isEmpty
     }
 
-    /// Stream PCM audio for the given text. Yields raw 16-bit PCM chunks at 44.1kHz mono.
-    func streamSpeech(text: String) -> AsyncThrowingStream<Data, Error> {
+    /// Fetch complete MP3 audio for the given text.
+    func synthesize(text: String) async throws -> Data {
         let key = apiKey
+        print("[ElevenLabs] Requesting TTS, key=\(key.isEmpty ? "MISSING" : "***\(key.suffix(6))"), text=\(text.prefix(50))")
+        guard !key.isEmpty else {
+            throw ElevenLabsError.notConfigured
+        }
+
         let url = URL(string: "https://api.elevenlabs.io/v1/text-to-speech/\(voiceId)/stream?output_format=\(outputFormat)")!
 
         var request = URLRequest(url: url)
@@ -39,37 +43,18 @@ actor ElevenLabsClient {
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        return AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                        continuation.finish(throwing: ElevenLabsError.serverError(code))
-                        return
-                    }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        print("[ElevenLabs] Response status: \(code), size: \(data.count) bytes")
 
-                    var buffer = Data()
-                    let chunkSize = 4096
-
-                    for try await byte in bytes {
-                        buffer.append(byte)
-                        if buffer.count >= chunkSize {
-                            continuation.yield(buffer)
-                            buffer = Data()
-                        }
-                    }
-                    // Flush remaining
-                    if !buffer.isEmpty {
-                        continuation.yield(buffer)
-                    }
-                    continuation.finish()
-                } catch {
-                    continuation.finish(throwing: error)
-                }
+        guard code == 200 else {
+            if let detail = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                print("[ElevenLabs] Error: \(detail)")
             }
-            continuation.onTermination = { _ in task.cancel() }
+            throw ElevenLabsError.serverError(code)
         }
+
+        return data
     }
 
     enum ElevenLabsError: LocalizedError {

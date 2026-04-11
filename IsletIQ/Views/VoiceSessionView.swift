@@ -118,13 +118,11 @@ struct VoiceSessionView: View {
             }
         }
         .onAppear {
-            // Store API key if not set
-            if KeychainHelper.load(key: "elevenlabs_api_key") == nil {
-                KeychainHelper.save(
-                    key: "elevenlabs_api_key",
-                    value: "4cbf50f67a69ff468f9841deb1f27ed21e9bcc12625edd837c4f92df5ed5ca8f"
-                )
-            }
+            // Store/update API key
+            KeychainHelper.save(
+                key: "elevenlabs_api_key",
+                value: "sk_f8eaa97b9e640f16f22b2e567396ff33c96997a81a249c0f"
+            )
 
             manager.onExchange = onExchange
 
