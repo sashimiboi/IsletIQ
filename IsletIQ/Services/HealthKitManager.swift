@@ -65,6 +65,39 @@ final class HealthKitManager {
     var weeklyCals: [(date: Date, cals: Double)] = []
     var activeCaloriesToday: Double = 0
 
+    // Heart rate
+    var currentHeartRate: Int = 0      // most recent sample
+    var restingHeartRate: Int = 0      // today's resting HR
+    var lastHeartRateTime: Date?
+    var heartRateHourly: [(date: Date, value: Double)] = []  // hourly avg today
+    var heartRateDaily: [(date: Date, value: Double)] = []   // daily avg last 30d
+
+    // HRV (heart rate variability, SDNN in ms)
+    var hrvLatest: Double = 0
+    var hrvLastDate: Date?
+    var hrvDaily: [(date: Date, value: Double)] = []         // last 30d
+
+    // VO2 Max (ml/kg·min)
+    var vo2MaxLatest: Double = 0
+    var vo2MaxLastDate: Date?
+    var vo2MaxHistory: [(date: Date, value: Double)] = []    // last 90d
+
+    // Blood Pressure (mmHg)
+    var bpSystolic: Int = 0
+    var bpDiastolic: Int = 0
+    var bpLastDate: Date?
+    var bpHistory: [(date: Date, sys: Double, dia: Double)] = []  // last 30d
+
+    // Body Temperature (Celsius)
+    var bodyTempLatest: Double = 0
+    var bodyTempLastDate: Date?
+    var bodyTempHistory: [(date: Date, value: Double)] = []  // last 30d
+
+    // Blood Oxygen / SpO2 (0..1 fraction, displayed as %)
+    var spo2Latest: Double = 0
+    var spo2LastDate: Date?
+    var spo2History: [(date: Date, value: Double)] = []  // last 30d, stored as percentage
+
     // Insulin data from HealthKit (Omnipod writes here)
     struct InsulinEntry: Identifiable {
         let id = UUID()
@@ -79,27 +112,47 @@ final class HealthKitManager {
     var lastBolusUnits: Double = 0
     var lastBolusTime: Date?
 
-    // Types we need
-    private let shareTypes: Set<HKSampleType> = [
-        HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
-        HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
-        HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!,
-    ]
+    // Types we need. Built defensively with compactMap so devices missing
+    // any specific type (older watch hardware, iPad without health) skip
+    // it instead of crashing on a force unwrap.
+    private let shareTypes: Set<HKSampleType> = {
+        let ids: [HKQuantityTypeIdentifier] = [
+            .dietaryEnergyConsumed,
+            .dietaryCarbohydrates,
+            .dietaryProtein,
+            .dietaryFatTotal,
+            .bloodGlucose,
+            .insulinDelivery,
+        ]
+        return Set(ids.compactMap { HKQuantityType.quantityType(forIdentifier: $0) })
+    }()
 
-    private let readTypes: Set<HKObjectType> = [
-        HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
-        HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
-        HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
-        HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!,
-        HKQuantityType.quantityType(forIdentifier: .stepCount)!,
-        HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned)!,
-        HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!,
-    ]
+    private let readTypes: Set<HKObjectType> = {
+        let quantityIds: [HKQuantityTypeIdentifier] = [
+            .dietaryEnergyConsumed,
+            .dietaryCarbohydrates,
+            .dietaryProtein,
+            .dietaryFatTotal,
+            .bloodGlucose,
+            .insulinDelivery,
+            .stepCount,
+            .activeEnergyBurned,
+            .heartRate,
+            .restingHeartRate,
+            .heartRateVariabilitySDNN,
+            .vo2Max,
+            .bloodPressureSystolic,
+            .bloodPressureDiastolic,
+            .bodyTemperature,
+            .oxygenSaturation,
+        ]
+        let categoryIds: [HKCategoryTypeIdentifier] = [
+            .sleepAnalysis,
+        ]
+        let quantities = quantityIds.compactMap { HKQuantityType.quantityType(forIdentifier: $0) as HKObjectType? }
+        let categories = categoryIds.compactMap { HKCategoryType.categoryType(forIdentifier: $0) as HKObjectType? }
+        return Set(quantities + categories)
+    }()
 
     // MARK: - Authorization
 
@@ -132,7 +185,7 @@ final class HealthKitManager {
             Calendar.current.isDateInToday(existing.date)
         }
         if alreadyLogged {
-            print("HealthKit: skipping \(name) - already logged today")
+            print("HealthKit: skipping \(name), already logged today")
             return
         }
 
@@ -147,30 +200,30 @@ final class HealthKitManager {
 
         var samples: [HKQuantitySample] = []
 
-        if carbs > 0 {
+        if carbs > 0, let type = HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates) {
             samples.append(HKQuantitySample(
-                type: HKQuantityType.quantityType(forIdentifier: .dietaryCarbohydrates)!,
+                type: type,
                 quantity: HKQuantity(unit: .gram(), doubleValue: carbs),
                 start: date, end: date, metadata: metadata
             ))
         }
-        if calories > 0 {
+        if calories > 0, let type = HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed) {
             samples.append(HKQuantitySample(
-                type: HKQuantityType.quantityType(forIdentifier: .dietaryEnergyConsumed)!,
+                type: type,
                 quantity: HKQuantity(unit: .kilocalorie(), doubleValue: calories),
                 start: date, end: date, metadata: metadata
             ))
         }
-        if protein > 0 {
+        if protein > 0, let type = HKQuantityType.quantityType(forIdentifier: .dietaryProtein) {
             samples.append(HKQuantitySample(
-                type: HKQuantityType.quantityType(forIdentifier: .dietaryProtein)!,
+                type: type,
                 quantity: HKQuantity(unit: .gram(), doubleValue: protein),
                 start: date, end: date, metadata: metadata
             ))
         }
-        if fat > 0 {
+        if fat > 0, let type = HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal) {
             samples.append(HKQuantitySample(
-                type: HKQuantityType.quantityType(forIdentifier: .dietaryFatTotal)!,
+                type: type,
                 quantity: HKQuantity(unit: .gram(), doubleValue: fat),
                 start: date, end: date, metadata: metadata
             ))
@@ -180,7 +233,7 @@ final class HealthKitManager {
 
         do {
             try await store.save(samples)
-            print("HealthKit: logged \(name) - \(carbs)g carbs, \(calories) kcal")
+            print("HealthKit: logged \(name), \(carbs)g carbs, \(calories) kcal")
             await fetchRecentMeals()
         } catch {
             print("HealthKit save failed: \(error)")
@@ -190,8 +243,12 @@ final class HealthKitManager {
     // MARK: - Log Glucose
 
     func logGlucose(value: Double, date: Date = .now) async {
+        guard let glucoseType = HKQuantityType.quantityType(forIdentifier: .bloodGlucose) else {
+            print("HealthKit: blood glucose type not available on this device")
+            return
+        }
         let sample = HKQuantitySample(
-            type: HKQuantityType.quantityType(forIdentifier: .bloodGlucose)!,
+            type: glucoseType,
             quantity: HKQuantity(unit: HKUnit(from: "mg/dL"), doubleValue: value),
             start: date, end: date
         )
@@ -206,7 +263,10 @@ final class HealthKitManager {
     // MARK: - Log Insulin
 
     func logInsulin(units: Double, date: Date = .now, isBasal: Bool = false) async {
-        let insulinType = HKQuantityType.quantityType(forIdentifier: .insulinDelivery)!
+        guard let insulinType = HKQuantityType.quantityType(forIdentifier: .insulinDelivery) else {
+            print("HealthKit: insulin delivery type not available on this device")
+            return
+        }
         let metadata: [String: Any] = [
             HKMetadataKeyInsulinDeliveryReason: isBasal
                 ? HKInsulinDeliveryReason.basal.rawValue
@@ -314,7 +374,10 @@ final class HealthKitManager {
     // MARK: - Fetch Sleep
 
     func fetchLastSleep(for date: Date = .now) async {
-        let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis)!
+        guard let sleepType = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else {
+            print("HealthKit: sleep analysis type not available on this device")
+            return
+        }
         // Look back 2 days from the target date to capture overnight sleep sessions
         let startDate = Calendar.current.date(byAdding: .day, value: -2, to: date)!
         let endDate: Date = Calendar.current.isDateInToday(date) ? .now : Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: date))!
@@ -410,7 +473,7 @@ final class HealthKitManager {
                     let start = sample.startDate
                     let end = sample.endDate
                     if let last = merged.last, start < last.end {
-                        // Overlapping — skip if fully covered, trim if partial
+                        // Overlapping: skip if fully covered, trim if partial
                         if end <= last.end { continue }
                         merged.append((value: sample.value, start: last.end, end: end))
                     } else {
@@ -644,12 +707,275 @@ final class HealthKitManager {
         }
     }
 
+    // MARK: - Fetch Heart Rate
+
+    func fetchHeartRate(for date: Date = .now) async {
+        let startOfDay = Calendar.current.startOfDay(for: date)
+        let endDate: Date = Calendar.current.isDateInToday(date) ? .now : Calendar.current.date(byAdding: .day, value: 1, to: startOfDay)!
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+
+        // Most recent heart rate sample (last 30 min)
+        if let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) {
+            let recentStart = max(startOfDay, Date().addingTimeInterval(-1800))
+            let predicate = HKQuery.predicateForSamples(withStart: recentStart, end: endDate, options: .strictStartDate)
+            let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let query = HKSampleQuery(sampleType: hrType, predicate: predicate, limit: 1, sortDescriptors: [sortDesc]) { _, samples, _ in
+                    let sample = (samples as? [HKQuantitySample])?.first
+                    let bpm = Int(sample?.quantity.doubleValue(for: bpmUnit) ?? 0)
+                    let when = sample?.endDate
+                    Task { @MainActor in
+                        self.currentHeartRate = bpm
+                        self.lastHeartRateTime = when
+                        continuation.resume()
+                    }
+                }
+                store.execute(query)
+            }
+        }
+
+        // Resting heart rate (latest available, written once daily)
+        if let restType = HKQuantityType.quantityType(forIdentifier: .restingHeartRate) {
+            let weekAgo = Calendar.current.date(byAdding: .day, value: -7, to: endDate)!
+            let predicate = HKQuery.predicateForSamples(withStart: weekAgo, end: endDate, options: .strictStartDate)
+            let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                let query = HKSampleQuery(sampleType: restType, predicate: predicate, limit: 1, sortDescriptors: [sortDesc]) { _, samples, _ in
+                    let bpm = Int(((samples as? [HKQuantitySample])?.first?.quantity.doubleValue(for: bpmUnit)) ?? 0)
+                    Task { @MainActor in
+                        self.restingHeartRate = bpm
+                        continuation.resume()
+                    }
+                }
+                store.execute(query)
+            }
+        }
+
+        print("[HealthKit] HR: \(currentHeartRate) bpm (resting \(restingHeartRate))")
+    }
+
+    // MARK: - Heart Rate History (hourly today + daily 30d)
+
+    func fetchHeartRateHistory() async {
+        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return }
+        let bpmUnit = HKUnit.count().unitDivided(by: .minute())
+        let cal = Calendar.current
+        let startOfDay = cal.startOfDay(for: .now)
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: startOfDay)!
+
+        // Hourly today
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: hrType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: startOfDay, end: .now),
+                options: .discreteAverage,
+                anchorDate: startOfDay,
+                intervalComponents: DateComponents(hour: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var hourly: [(date: Date, value: Double)] = []
+                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
+                    if let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 {
+                        hourly.append((date: stats.startDate, value: avg))
+                    }
+                }
+                Task { @MainActor in
+                    self.heartRateHourly = hourly
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+
+        // Daily 30d
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKStatisticsCollectionQuery(
+                quantityType: hrType,
+                quantitySamplePredicate: HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now),
+                options: .discreteAverage,
+                anchorDate: thirtyDaysAgo,
+                intervalComponents: DateComponents(day: 1)
+            )
+            query.initialResultsHandler = { _, results, _ in
+                var daily: [(date: Date, value: Double)] = []
+                results?.enumerateStatistics(from: thirtyDaysAgo, to: .now) { stats, _ in
+                    if let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 {
+                        daily.append((date: stats.startDate, value: avg))
+                    }
+                }
+                Task { @MainActor in
+                    self.heartRateDaily = daily
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Fetch HRV
+
+    func fetchHRV() async {
+        guard let hrvType = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else { return }
+        let msUnit = HKUnit.secondUnit(with: .milli)
+        let cal = Calendar.current
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
+        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(sampleType: hrvType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                let arr = (samples as? [HKQuantitySample]) ?? []
+                let series: [(date: Date, value: Double)] = arr.map { ($0.startDate, $0.quantity.doubleValue(for: msUnit)) }
+                let latest = arr.last
+                Task { @MainActor in
+                    self.hrvDaily = series
+                    self.hrvLatest = latest?.quantity.doubleValue(for: msUnit) ?? 0
+                    self.hrvLastDate = latest?.startDate
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+        print("[HealthKit] HRV: \(String(format: "%.0f", hrvLatest))ms (\(hrvDaily.count) samples)")
+    }
+
+    // MARK: - Fetch VO2 Max
+
+    func fetchVO2Max() async {
+        guard let vo2Type = HKQuantityType.quantityType(forIdentifier: .vo2Max) else { return }
+        let unit = HKUnit(from: "ml/kg*min")
+        let cal = Calendar.current
+        let ninetyDaysAgo = cal.date(byAdding: .day, value: -90, to: cal.startOfDay(for: .now))!
+        let predicate = HKQuery.predicateForSamples(withStart: ninetyDaysAgo, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(sampleType: vo2Type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                let arr = (samples as? [HKQuantitySample]) ?? []
+                let series: [(date: Date, value: Double)] = arr.map { ($0.startDate, $0.quantity.doubleValue(for: unit)) }
+                let latest = arr.last
+                Task { @MainActor in
+                    self.vo2MaxHistory = series
+                    self.vo2MaxLatest = latest?.quantity.doubleValue(for: unit) ?? 0
+                    self.vo2MaxLastDate = latest?.startDate
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+        print("[HealthKit] VO2 Max: \(String(format: "%.1f", vo2MaxLatest)) ml/kg·min (\(vo2MaxHistory.count) samples)")
+    }
+
+    // MARK: - Fetch Blood Pressure
+
+    func fetchBloodPressure() async {
+        guard let sysType = HKQuantityType.quantityType(forIdentifier: .bloodPressureSystolic),
+              let diaType = HKQuantityType.quantityType(forIdentifier: .bloodPressureDiastolic) else { return }
+        let mmHg = HKUnit.millimeterOfMercury()
+        let cal = Calendar.current
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
+        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        // Fetch both series independently, then pair by timestamp (within 5 sec)
+        let sysSamples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let q = HKSampleQuery(sampleType: sysType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(q)
+        }
+        let diaSamples: [HKQuantitySample] = await withCheckedContinuation { continuation in
+            let q = HKSampleQuery(sampleType: diaType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(q)
+        }
+
+        var pairs: [(date: Date, sys: Double, dia: Double)] = []
+        for s in sysSamples {
+            let sysVal = s.quantity.doubleValue(for: mmHg)
+            if let d = diaSamples.first(where: { abs($0.startDate.timeIntervalSince(s.startDate)) < 5 }) {
+                pairs.append((date: s.startDate, sys: sysVal, dia: d.quantity.doubleValue(for: mmHg)))
+            }
+        }
+
+        let latest = pairs.last
+        await MainActor.run {
+            self.bpHistory = pairs
+            self.bpSystolic = Int(latest?.sys ?? 0)
+            self.bpDiastolic = Int(latest?.dia ?? 0)
+            self.bpLastDate = latest?.date
+            print("[HealthKit] BP: \(self.bpSystolic)/\(self.bpDiastolic) (\(pairs.count) readings)")
+        }
+    }
+
+    // MARK: - Fetch Body Temperature
+
+    func fetchBodyTemperature() async {
+        guard let tempType = HKQuantityType.quantityType(forIdentifier: .bodyTemperature) else { return }
+        let cUnit = HKUnit.degreeCelsius()
+        let cal = Calendar.current
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
+        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(sampleType: tempType, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                let arr = (samples as? [HKQuantitySample]) ?? []
+                let series: [(date: Date, value: Double)] = arr.map { ($0.startDate, $0.quantity.doubleValue(for: cUnit)) }
+                let latest = arr.last
+                Task { @MainActor in
+                    self.bodyTempHistory = series
+                    self.bodyTempLatest = latest?.quantity.doubleValue(for: cUnit) ?? 0
+                    self.bodyTempLastDate = latest?.startDate
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+        print("[HealthKit] Body Temp: \(String(format: "%.1f", bodyTempLatest))°C (\(bodyTempHistory.count) samples)")
+    }
+
+    // MARK: - Fetch Blood Oxygen (SpO2)
+
+    func fetchBloodOxygen() async {
+        guard let spo2Type = HKQuantityType.quantityType(forIdentifier: .oxygenSaturation) else { return }
+        let pctUnit = HKUnit.percent()
+        let cal = Calendar.current
+        let thirtyDaysAgo = cal.date(byAdding: .day, value: -30, to: cal.startOfDay(for: .now))!
+        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: .now, options: .strictStartDate)
+        let sortDesc = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let query = HKSampleQuery(sampleType: spo2Type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: [sortDesc]) { _, samples, _ in
+                let arr = (samples as? [HKQuantitySample]) ?? []
+                // HealthKit returns 0..1; convert to percentage for display
+                let series: [(date: Date, value: Double)] = arr.map { ($0.startDate, $0.quantity.doubleValue(for: pctUnit) * 100) }
+                let latest = arr.last
+                Task { @MainActor in
+                    self.spo2History = series
+                    self.spo2Latest = (latest?.quantity.doubleValue(for: pctUnit) ?? 0) * 100
+                    self.spo2LastDate = latest?.startDate
+                    continuation.resume()
+                }
+            }
+            store.execute(query)
+        }
+        print("[HealthKit] SpO2: \(String(format: "%.0f", spo2Latest))% (\(spo2History.count) samples)")
+    }
+
     // MARK: - Fetch All Health Data
 
     func fetchAll(for date: Date = .now) async {
         await fetchRecentMeals(for: date)
         await fetchLastSleep(for: date)
         await fetchActivityToday(for: date)
+        await fetchHeartRate(for: date)
+        await fetchHRV()
+        await fetchVO2Max()
+        await fetchBloodPressure()
+        await fetchBodyTemperature()
+        await fetchBloodOxygen()
         await fetchInsulinToday(for: date)
     }
 
@@ -705,7 +1031,10 @@ final class HealthKitManager {
     // MARK: - Observe New Food Entries
 
     func startObservingMeals(onChange: @escaping () -> Void) {
-        let foodType = HKCorrelationType.correlationType(forIdentifier: .food)!
+        guard let foodType = HKCorrelationType.correlationType(forIdentifier: .food) else {
+            print("HealthKit: food correlation type not available on this device")
+            return
+        }
         let query = HKObserverQuery(sampleType: foodType, predicate: nil) { _, completionHandler, error in
             if error == nil {
                 onChange()

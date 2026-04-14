@@ -53,6 +53,7 @@ struct IsletIQApp: App {
     }()
 
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -64,6 +65,14 @@ struct IsletIQApp: App {
                 }
         }
         .modelContainer(sharedModelContainer)
+        .onChange(of: scenePhase) { _, newPhase in
+            // Reset per-session insulin disclaimer ack when the app
+            // goes to background, so the user must re-acknowledge on
+            // their next session (App Store guideline 1.4.1).
+            if newPhase == .background {
+                InsulinDisclaimerManager.shared.resetForNewSession()
+            }
+        }
     }
 
     private func registerBackgroundTasks() {

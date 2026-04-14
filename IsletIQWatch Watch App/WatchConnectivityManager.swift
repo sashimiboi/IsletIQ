@@ -151,7 +151,7 @@ class WatchConnectivityManager: NSObject {
     var pumpModel: String = "--"
     var recentBoluses: [(units: Double, carbs: Int, timestamp: Double)] = []
 
-    private let apiBase = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+    private let apiBase = "https://api.isletiq.com"
     private let notifications = WatchNotificationManager.shared
 
     private override init() {

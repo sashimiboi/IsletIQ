@@ -1,14 +1,12 @@
 import Foundation
 
 enum APIConfig {
-    // AWS ECS Fargate + ALB
-    // TODO: Switch to HTTPS once custom domain + ACM certificate is configured
-    // App Store submission requires HTTPS - register isletiq.com and create ACM cert
-    static let cloudURL = "http://isletiq-alb-1046434082.us-east-1.elb.amazonaws.com"
+    // AWS ECS Fargate behind ALB, served via custom domain with ACM cert
+    static let cloudURL = "https://api.isletiq.com"
     // Local dev fallback
     static let macIP = "192.168.1.65"
 
-    // Auth token (stored in Keychain for security)
+    // Auth token, stored in Keychain only.
     static var authToken: String? {
         get { KeychainHelper.load(key: "auth_token") }
         set {
@@ -17,8 +15,6 @@ enum APIConfig {
             } else {
                 KeychainHelper.delete(key: "auth_token")
             }
-            // Clean up legacy UserDefaults storage
-            UserDefaults.standard.removeObject(forKey: "auth_token")
         }
     }
 

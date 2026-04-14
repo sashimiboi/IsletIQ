@@ -292,12 +292,12 @@ struct GeneralSettingsContent: View {
         request.httpMethod = "DELETE"
         APIConfig.applyAuth(to: &request)
         _ = try? await URLSession.shared.data(for: request)
-        // Clear all local data
+        // Clear all local data. Auth tokens live only in the Keychain,
+        // never in UserDefaults.
         APIConfig.authToken = nil
         KeychainHelper.delete(key: "elevenlabs_api_key")
         KeychainHelper.delete(key: "dexcom_session")
         UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
-        UserDefaults.standard.removeObject(forKey: "auth_token")
         UserDefaults.standard.removeObject(forKey: "elevenlabs_voice_id")
     }
 }

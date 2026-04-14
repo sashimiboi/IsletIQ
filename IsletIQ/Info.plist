@@ -7,9 +7,9 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>IsletIQ needs microphone access for voice input to the agent.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>IsletIQ needs to read your health data to show glucose, insulin, and meal history.</string>
+	<string>IsletIQ reads your glucose, insulin, meals, sleep, heart rate, HRV, blood pressure, body temperature, and blood oxygen from Apple Health to show your daily health dashboard, surface trends, and provide personalized diabetes insights you can review with your healthcare provider.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>IsletIQ needs to log meals, glucose readings, and insulin deliveries to Apple Health.</string>
+	<string>IsletIQ writes the meals, carb counts, glucose readings, and insulin doses you log so your full diabetes history lives in Apple Health alongside data from your CGM, pump, and other apps.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>IsletIQ uses the camera to photograph food and supplies for the AI agent.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -22,10 +22,5 @@
 	<array>
 		<string>com.isletiq.refresh</string>
 	</array>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
 </dict>
 </plist>

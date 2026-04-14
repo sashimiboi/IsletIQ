@@ -201,6 +201,13 @@ struct DashboardView: View {
         }
         .padding(20)
         .card()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Glucose")
+        .accessibilityValue(
+            latest.map { r in
+                "\(r.value) milligrams per deciliter, trending \(r.trend.symbol.replacingOccurrences(of: ".", with: " ")), \(r.status.label)"
+            } ?? "no current reading"
+        )
     }
 
     // MARK: - Stats Row

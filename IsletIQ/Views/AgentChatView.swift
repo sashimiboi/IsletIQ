@@ -121,6 +121,8 @@ struct AgentChatView: View {
     #endif
     @State private var sessions: [(id: String, title: String, agent: String, date: String)] = []
     @State private var todayMedications: [TodayMedication] = []
+    @State private var showBolusDisclaimer = false
+    private let disclaimerManager = InsulinDisclaimerManager.shared
     @FocusState private var inputFocused: Bool
 
     let agentClient = AgentClient()
@@ -223,6 +225,10 @@ struct AgentChatView: View {
         }
         .task { await fetchSessions() }
         .onAppear {
+            // Per-session medical disclaimer gate (App Store guideline 1.4.1)
+            if !disclaimerManager.acknowledgedThisSession {
+                showBolusDisclaimer = true
+            }
             Task {
                 let online = await agentClient.healthCheck()
                 await MainActor.run { backendOnline = online }
@@ -238,6 +244,11 @@ struct AgentChatView: View {
                     let meds = await medClient.fetchTodaySchedule()
                     await MainActor.run { todayMedications = meds }
                 }
+            }
+        }
+        .sheet(isPresented: $showBolusDisclaimer) {
+            BolusDisclaimerSheet {
+                disclaimerManager.acknowledge()
             }
         }
     }

@@ -22,6 +22,11 @@ struct WatchHomeView: View {
                 .padding(.horizontal, 4)
             }
             .navigationTitle("IsletIQ")
+            // Watch screens are tiny, so we let Dynamic Type scale text
+            // up to the first accessibility tier. Beyond that the layout
+            // breaks down. This still meets HIG guidance, "support Dynamic
+            // Type, even if you must constrain the range."
+            .dynamicTypeSize(.small ... .accessibility1)
             .onAppear {
                 connectivity.requestUpdate()
                 connectivity.refresh()
@@ -64,6 +69,9 @@ struct WatchHomeView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Glucose")
+        .accessibilityValue("\(connectivity.currentGlucose) milligrams per deciliter, trending \(connectivity.trend), \(connectivity.status)")
     }
 
     // MARK: - Stats Row

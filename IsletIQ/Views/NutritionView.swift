@@ -3,14 +3,18 @@ import SwiftUI
 struct NutritionView: View {
     var healthKit: HealthKitManager?
     @State private var showLogMeal = false
-    @State private var showStepsDetail = false
-    @State private var showCaloriesDetail = false
+    @State private var activeMetric: HealthMetric? = nil
     @State private var isLoading = false
     @State private var todayMeds: [TodayMedication] = []
     @State private var showAddMed = false
     @State private var showMedList = false
     @State private var selectedDate: Date = .now
     private let medClient = MedicationClient()
+
+    enum HealthMetric: String, Identifiable {
+        case steps, calories, heartRate, hrv, vo2Max, bloodPressure, bodyTemp, bloodOxygen
+        var id: String { rawValue }
+    }
 
     private var isToday: Bool {
         Calendar.current.isDateInToday(selectedDate)
@@ -25,23 +29,21 @@ struct NutritionView: View {
                 // Sleep
                 sleepCard
 
-                // Activity
-                activityCard
-
-                // Medications
+                // Food & medication grouped right under sleep
                 medicationsCard
-
-                // Today's nutrition
                 todaySummary
 
-                // Quick log
-                quickLogCard
+                // Health metrics grid (steps, HR, HRV, VO₂, BP, temp, SpO₂)
+                activityCard
 
-                // Recent meals from HealthKit
-                recentMealsCard
+                // Quick log before the reference
+                quickLogCard
 
                 // Carb reference
                 carbReferenceCard
+
+                // Recent meals at the bottom
+                recentMealsCard
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -67,6 +69,9 @@ struct NutritionView: View {
         }
         .sheet(isPresented: $showAddMed) {
             AddMedicationView(onSave: { Task { todayMeds = await medClient.fetchTodaySchedule() } })
+        }
+        .sheet(item: $activeMetric) { metric in
+            metricSheet(for: metric)
         }
         .navigationDestination(isPresented: $showMedList) {
             MedicationListView()
@@ -170,59 +175,242 @@ struct NutritionView: View {
     // MARK: - Activity Card
 
     private var activityCard: some View {
-        HStack(spacing: 12) {
-            Button { showStepsDetail = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "figure.walk")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.normal)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(healthKit?.stepsToday ?? 0)")
-                            .font(.subheadline.weight(.bold).monospacedDigit())
-                            .foregroundStyle(Theme.textPrimary)
-                        Text("Steps")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .padding(16)
-                .card()
-            }
-            .buttonStyle(.plain)
-            .sheet(isPresented: $showStepsDetail) {
-                StepsDetailView(healthKit: healthKit)
-            }
+        let cols = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        let stepsVal = healthKit?.stepsToday ?? 0
+        let calsVal = Int(healthKit?.activeCaloriesToday ?? 0)
+        let hr = healthKit?.currentHeartRate ?? 0
+        let restHr = healthKit?.restingHeartRate ?? 0
+        let hrv = healthKit?.hrvLatest ?? 0
+        let vo2 = healthKit?.vo2MaxLatest ?? 0
+        let sys = healthKit?.bpSystolic ?? 0
+        let dia = healthKit?.bpDiastolic ?? 0
+        let temp = healthKit?.bodyTempLatest ?? 0
+        let spo2 = healthKit?.spo2Latest ?? 0
 
-            Button { showCaloriesDetail = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "flame.fill")
-                        .font(.subheadline)
-                        .foregroundStyle(Theme.elevated)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(Int(healthKit?.activeCaloriesToday ?? 0))")
-                            .font(.subheadline.weight(.bold).monospacedDigit())
-                            .foregroundStyle(Theme.textPrimary)
-                        Text("Active Cal")
-                            .font(.caption2)
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-                    Spacer()
+        return LazyVGrid(columns: cols, spacing: 12) {
+            metricTile(
+                icon: "figure.walk",
+                color: Theme.normal,
+                value: "\(stepsVal)",
+                label: "Steps",
+                subtitle: stepsVal > 0 ? String(format: "%.1f mi", Double(stepsVal) * 0.0004) : nil
+            ) { activeMetric = .steps }
+
+            metricTile(
+                icon: "flame.fill",
+                color: Theme.elevated,
+                value: "\(calsVal)",
+                label: "Active Cal",
+                subtitle: nil
+            ) { activeMetric = .calories }
+
+            metricTile(
+                icon: "heart.fill",
+                color: .pink,
+                value: hr > 0 ? "\(hr)" : "--",
+                label: "Heart Rate",
+                subtitle: restHr > 0 ? "rest \(restHr) bpm" : "bpm"
+            ) { activeMetric = .heartRate }
+
+            metricTile(
+                icon: "waveform.path.ecg",
+                color: .purple,
+                value: hrv > 0 ? "\(Int(hrv))" : "--",
+                label: "HRV",
+                subtitle: "ms (SDNN)"
+            ) { activeMetric = .hrv }
+
+            metricTile(
+                icon: "lungs.fill",
+                color: Theme.teal,
+                value: vo2 > 0 ? String(format: "%.1f", vo2) : "--",
+                label: "VO₂ Max",
+                subtitle: "ml/kg·min"
+            ) { activeMetric = .vo2Max }
+
+            metricTile(
+                icon: "heart.text.square.fill",
+                color: .red,
+                value: sys > 0 ? "\(sys)/\(dia)" : "--",
+                label: "Blood Pressure",
+                subtitle: "mmHg"
+            ) { activeMetric = .bloodPressure }
+
+            metricTile(
+                icon: "thermometer.medium",
+                color: .orange,
+                value: temp > 0 ? String(format: "%.1f°", temp * 9 / 5 + 32) : "--",
+                label: "Body Temp",
+                subtitle: temp > 0 ? String(format: "%.1f°C", temp) : "°F"
+            ) { activeMetric = .bodyTemp }
+
+            metricTile(
+                icon: "lungs",
+                color: .blue,
+                value: spo2 > 0 ? String(format: "%.0f%%", spo2) : "--",
+                label: "Blood Oxygen",
+                subtitle: "SpO₂"
+            ) { activeMetric = .bloodOxygen }
+        }
+    }
+
+    // MARK: - Metric Tile
+
+    private func metricTile(
+        icon: String,
+        color: Color,
+        value: String,
+        label: String,
+        subtitle: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .foregroundStyle(color)
+                    Text(label)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.textSecondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9))
                         .foregroundStyle(Theme.textTertiary)
                 }
-                .padding(16)
-                .card()
+
+                Text(value)
+                    .font(.title3.weight(.bold).monospacedDigit())
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 9))
+                        .foregroundStyle(Theme.textTertiary)
+                        .lineLimit(1)
+                } else {
+                    Text(" ")
+                        .font(.system(size: 9))
+                }
             }
-            .buttonStyle(.plain)
-            .sheet(isPresented: $showCaloriesDetail) {
-                CaloriesDetailView(healthKit: healthKit)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .card()
         }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+        .accessibilityValue(value == "--" ? "no data" : "\(value)\(subtitle.map { ", \($0)" } ?? "")")
+        .accessibilityHint("Opens \(label) details")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    // MARK: - Metric Sheet Builder
+
+    @ViewBuilder
+    private func metricSheet(for metric: HealthMetric) -> some View {
+        switch metric {
+        case .steps:
+            StepsDetailView(healthKit: healthKit)
+        case .calories:
+            CaloriesDetailView(healthKit: healthKit)
+        case .heartRate:
+            HealthMetricDetailView(
+                title: "Heart Rate",
+                icon: "heart.fill",
+                color: .pink,
+                unit: "bpm",
+                currentText: (healthKit?.currentHeartRate ?? 0) > 0 ? "\(healthKit!.currentHeartRate)" : "--",
+                currentSubtitle: (healthKit?.restingHeartRate ?? 0) > 0 ? "Resting \(healthKit!.restingHeartRate) bpm" : nil,
+                series: healthKit?.heartRateDaily ?? [],
+                format: { String(format: "%.0f", $0) },
+                goodRange: 60...100,
+                fetch: { await healthKit?.fetchHeartRateHistory() }
+            )
+        case .hrv:
+            HealthMetricDetailView(
+                title: "Heart Rate Variability",
+                icon: "waveform.path.ecg",
+                color: .purple,
+                unit: "ms (SDNN)",
+                currentText: (healthKit?.hrvLatest ?? 0) > 0 ? "\(Int(healthKit!.hrvLatest))" : "--",
+                currentSubtitle: healthKit?.hrvLastDate.map { dateLabel($0) },
+                series: healthKit?.hrvDaily ?? [],
+                format: { String(format: "%.0f", $0) },
+                goodRange: nil,
+                fetch: { await healthKit?.fetchHRV() }
+            )
+        case .vo2Max:
+            HealthMetricDetailView(
+                title: "VO₂ Max",
+                icon: "lungs.fill",
+                color: Theme.teal,
+                unit: "ml/kg·min",
+                currentText: (healthKit?.vo2MaxLatest ?? 0) > 0 ? String(format: "%.1f", healthKit!.vo2MaxLatest) : "--",
+                currentSubtitle: healthKit?.vo2MaxLastDate.map { dateLabel($0) },
+                series: healthKit?.vo2MaxHistory ?? [],
+                format: { String(format: "%.1f", $0) },
+                goodRange: nil,
+                fetch: { await healthKit?.fetchVO2Max() }
+            )
+        case .bloodPressure:
+            let bpData = healthKit?.bpHistory ?? []
+            let sysSeries = bpData.map { (date: $0.date, value: $0.sys) }
+            let diaSeries = bpData.map { (date: $0.date, value: $0.dia) }
+            HealthMetricDetailView(
+                title: "Blood Pressure",
+                icon: "heart.text.square.fill",
+                color: .red,
+                unit: "mmHg",
+                currentText: (healthKit?.bpSystolic ?? 0) > 0 ? "\(healthKit!.bpSystolic)/\(healthKit!.bpDiastolic)" : "--",
+                currentSubtitle: healthKit?.bpLastDate.map { dateLabel($0) },
+                series: sysSeries,
+                series2: diaSeries,
+                series2Label: "Diastolic",
+                format: { String(format: "%.0f", $0) },
+                goodRange: nil,
+                fetch: { await healthKit?.fetchBloodPressure() }
+            )
+        case .bodyTemp:
+            // Convert C → F for display
+            let tempC = healthKit?.bodyTempLatest ?? 0
+            let series = (healthKit?.bodyTempHistory ?? []).map { (date: $0.date, value: $0.value * 9 / 5 + 32) }
+            HealthMetricDetailView(
+                title: "Body Temperature",
+                icon: "thermometer.medium",
+                color: .orange,
+                unit: "°F",
+                currentText: tempC > 0 ? String(format: "%.1f°", tempC * 9 / 5 + 32) : "--",
+                currentSubtitle: healthKit?.bodyTempLastDate.map { dateLabel($0) },
+                series: series,
+                format: { String(format: "%.1f°", $0) },
+                goodRange: 97.0...99.0,
+                fetch: { await healthKit?.fetchBodyTemperature() }
+            )
+        case .bloodOxygen:
+            HealthMetricDetailView(
+                title: "Blood Oxygen",
+                icon: "lungs",
+                color: .blue,
+                unit: "% SpO₂",
+                currentText: (healthKit?.spo2Latest ?? 0) > 0 ? String(format: "%.0f%%", healthKit!.spo2Latest) : "--",
+                currentSubtitle: healthKit?.spo2LastDate.map { dateLabel($0) },
+                series: healthKit?.spo2History ?? [],
+                format: { String(format: "%.0f%%", $0) },
+                goodRange: 95.0...100.0,
+                fetch: { await healthKit?.fetchBloodOxygen() }
+            )
+        }
+    }
+
+    private func dateLabel(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return "Last reading: \(f.string(from: d))"
     }
 
     // MARK: - Medications Card
