@@ -14,12 +14,13 @@ struct AgentDef: Identifiable, Equatable {
 }
 
 let agents: [AgentDef] = [
-    AgentDef(id: "islet1", name: "Islet-1", icon: "brain.head.profile.fill", description: "General-purpose CGM & pump assistant"),
+    AgentDef(id: "islet1", name: "Islet-A1", icon: "brain.head.profile.fill", description: "General-purpose CGM & pump assistant"),
     AgentDef(id: "cgm", name: "CGM", icon: "chart.line.uptrend.xyaxis", description: "Glucose pattern analysis & trends"),
     AgentDef(id: "pump", name: "Pump", icon: "drop.circle", description: "Insulin dosing & pump management"),
     AgentDef(id: "nutrition", name: "Nutrition", icon: "fork.knife", description: "Meal estimation & HealthKit logging"),
     AgentDef(id: "supply", name: "Supplies", icon: "shippingbox", description: "Track & manage diabetes supplies"),
     AgentDef(id: "medication", name: "Medications", icon: "pills.fill", description: "Medication tracking & dose logging"),
+    AgentDef(id: "glycemic", name: "Glycemic Impact", icon: "chart.xyaxis.line", description: "Reference GI lookup & personal glycemic response"),
 ]
 
 // MARK: - Tool Definitions
