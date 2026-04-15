@@ -6,6 +6,7 @@ struct AuthView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var name = ""
+    @State private var showPassword = false
     let onAuth: () -> Void
 
     var body: some View {
@@ -72,10 +73,31 @@ struct AuthView: View {
                         .padding(14)
                         .background(Theme.muted, in: RoundedRectangle(cornerRadius: 12))
 
-                    SecureField("Password", text: $password)
+                    HStack(spacing: 8) {
+                        Group {
+                            if showPassword {
+                                TextField("Password", text: $password)
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                            } else {
+                                SecureField("Password", text: $password)
+                            }
+                        }
                         .textContentType(isLogin ? .password : .newPassword)
-                        .padding(14)
-                        .background(Theme.muted, in: RoundedRectangle(cornerRadius: 12))
+
+                        Button {
+                            showPassword.toggle()
+                        } label: {
+                            Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.textSecondary)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(14)
+                    .background(Theme.muted, in: RoundedRectangle(cornerRadius: 12))
                 }
 
                 // Error

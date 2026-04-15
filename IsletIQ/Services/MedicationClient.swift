@@ -43,16 +43,57 @@ actor MedicationClient {
         }
     }
 
-    func createMedication(name: String, dosage: String, category: String, frequency: String, scheduleTimes: [String], notes: String = "") async -> Bool {
+    func fetchHistory(days: Int = 14) async -> MedicationHistoryResult {
+        guard let url = URL(string: "\(baseURL)/api/medications/history?days=\(days)") else {
+            return .init(days: [], errorMessage: "Invalid URL")
+        }
+        guard APIConfig.authToken != nil else {
+            return .init(days: [], errorMessage: "Not signed in")
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 {
+                await MainActor.run { AuthManager.handleUnauthorized() }
+                return .init(days: [], errorMessage: "Signed out")
+            }
+            if status == 404 {
+                print("MedicationClient history: 404. Restart FastAPI to pick up /api/medications/history")
+                return .init(days: [], errorMessage: "Endpoint missing. Restart the backend.")
+            }
+            if status / 100 != 2 {
+                let body = String(data: data, encoding: .utf8)?.prefix(120) ?? ""
+                print("MedicationClient history HTTP \(status): \(body)")
+                return .init(days: [], errorMessage: "HTTP \(status)")
+            }
+            struct Wrapper: Codable { let days: [MedicationHistoryDay] }
+            let wrapper = try JSONDecoder().decode(Wrapper.self, from: data)
+            return .init(days: wrapper.days, errorMessage: nil)
+        } catch let error as URLError where error.code == .cancelled {
+            // View transition cancelled the task; not a real failure.
+            return .init(days: [], errorMessage: nil)
+        } catch {
+            print("MedicationClient history error: \(error)")
+            return .init(days: [], errorMessage: "Network error")
+        }
+    }
+
+    func createMedication(name: String, dosage: String, category: String, frequency: String, scheduleTimes: [String], notes: String = "", intervalDays: Int = 1, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         APIConfig.applyAuth(to: &request)
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "name": name, "dosage": dosage, "category": category,
-            "frequency": frequency, "schedule_times": scheduleTimes, "notes": notes
+            "frequency": frequency, "schedule_times": scheduleTimes, "notes": notes,
+            "interval_days": intervalDays,
         ]
+        if let dueWeekday { body["due_weekday"] = dueWeekday }
+        if let dueDayOfMonth { body["due_day_of_month"] = dueDayOfMonth }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -60,7 +101,7 @@ actor MedicationClient {
         } catch { return false }
     }
 
-    func updateMedication(id: Int, name: String? = nil, dosage: String? = nil, category: String? = nil, frequency: String? = nil, scheduleTimes: [String]? = nil, notes: String? = nil, isActive: Bool? = nil) async -> Bool {
+    func updateMedication(id: Int, name: String? = nil, dosage: String? = nil, category: String? = nil, frequency: String? = nil, scheduleTimes: [String]? = nil, notes: String? = nil, isActive: Bool? = nil, intervalDays: Int? = nil, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications/\(id)") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
@@ -74,6 +115,9 @@ actor MedicationClient {
         if let scheduleTimes { body["schedule_times"] = scheduleTimes }
         if let notes { body["notes"] = notes }
         if let isActive { body["is_active"] = isActive }
+        if let intervalDays { body["interval_days"] = intervalDays }
+        if let dueWeekday { body["due_weekday"] = dueWeekday }
+        if let dueDayOfMonth { body["due_day_of_month"] = dueDayOfMonth }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -83,6 +127,21 @@ actor MedicationClient {
 
     func deleteMedication(id: Int) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications/\(id)") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+        } catch { return false }
+    }
+
+    func unlogDose(medicationId: Int, scheduledTime: String?) async -> Bool {
+        var components = URLComponents(string: "\(baseURL)/api/medications/\(medicationId)/doses")
+        if let scheduledTime {
+            components?.queryItems = [URLQueryItem(name: "scheduled_time", value: scheduledTime)]
+        }
+        guard let url = components?.url else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
         APIConfig.applyAuth(to: &request)

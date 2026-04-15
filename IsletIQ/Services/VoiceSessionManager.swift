@@ -376,7 +376,7 @@ final class VoiceSessionManager: NSObject, AVAudioPlayerDelegate {
     private func configureAudioSessionForRecording() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetoothHFP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             print("[VoiceSession] Record session error: \(error)")

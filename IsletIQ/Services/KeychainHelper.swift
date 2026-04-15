@@ -6,7 +6,7 @@ import Security
 /// the device to be unlocked for access. This is the only place credentials
 /// should be persisted, never UserDefaults.
 enum KeychainHelper {
-    static func save(key: String, value: String) {
+    nonisolated static func save(key: String, value: String) {
         guard let data = value.data(using: .utf8) else { return }
 
         // Delete any existing entry first so we don't try to add over it
@@ -28,7 +28,7 @@ enum KeychainHelper {
         SecItemAdd(attributes as CFDictionary, nil)
     }
 
-    static func load(key: String) -> String? {
+    nonisolated static func load(key: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,
@@ -42,7 +42,7 @@ enum KeychainHelper {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(key: String) {
+    nonisolated static func delete(key: String) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccount as String: key,

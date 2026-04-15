@@ -37,7 +37,7 @@ struct SleepChartView: View {
                     }
 
                     // Draw segments with connectors
-                    for (i, segment) in sleep.segments.enumerated() {
+                    for (_, segment) in sleep.segments.enumerated() {
                         let x1 = labelW + chartW * CGFloat((segment.start.timeIntervalSince1970 - bedtime) / timeRange)
                         let x2 = labelW + chartW * CGFloat((segment.end.timeIntervalSince1970 - bedtime) / timeRange)
                         let segW = max(2, x2 - x1)

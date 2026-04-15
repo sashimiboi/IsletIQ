@@ -6,6 +6,9 @@ struct NutritionView: View {
     @State private var activeMetric: HealthMetric? = nil
     @State private var isLoading = false
     @State private var todayMeds: [TodayMedication] = []
+    @State private var medHistory: [MedicationHistoryDay] = []
+    @State private var medHistoryError: String? = nil
+    @State private var medHistoryDays: Int = 14
     @State private var showAddMed = false
     @State private var showMedList = false
     @State private var selectedDate: Date = .now
@@ -447,7 +450,7 @@ struct NutritionView: View {
             }
 
             if todayMeds.isEmpty {
-                Text("No medications — tap + to add")
+                Text("No medications. Tap + to add")
                     .font(.caption)
                     .foregroundStyle(Theme.textTertiary)
                     .padding(.vertical, 4)
@@ -457,11 +460,14 @@ struct NutritionView: View {
                         let taken = med.isDoseTaken(at: time)
                         HStack(spacing: 10) {
                             Button {
-                                if !taken {
-                                    Task {
+                                Task {
+                                    if taken {
+                                        _ = await medClient.unlogDose(medicationId: med.id, scheduledTime: time)
+                                    } else {
                                         _ = await medClient.logDose(medicationId: med.id, scheduledTime: time)
-                                        todayMeds = await medClient.fetchTodaySchedule()
                                     }
+                                    todayMeds = await medClient.fetchTodaySchedule()
+                                    await loadMedHistory()
                                 }
                             } label: {
                                 Image(systemName: taken ? "checkmark.circle.fill" : "circle")
@@ -470,12 +476,29 @@ struct NutritionView: View {
                             }
                             .buttonStyle(.plain)
 
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(med.name)
-                                    .font(.subheadline.weight(.medium))
-                                    .foregroundStyle(taken ? Theme.textTertiary : Theme.textPrimary)
-                                    .strikethrough(taken)
-                                if !med.dosage.isEmpty {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(med.name)
+                                        .font(.subheadline.weight(.medium))
+                                        .foregroundStyle(taken ? Theme.textTertiary : Theme.textPrimary)
+                                        .strikethrough(taken)
+                                    if !med.isDaily {
+                                        Text(med.cadenceLabel.uppercased())
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundStyle(med.isOverdue ? .white : Theme.primary)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(
+                                                med.isOverdue ? Color.red : Theme.primary.opacity(0.12),
+                                                in: RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            )
+                                    }
+                                }
+                                if med.isOverdue {
+                                    Text("\(med.daysOverdue)d overdue")
+                                        .font(.caption2.weight(.semibold))
+                                        .foregroundStyle(.red)
+                                } else if !med.dosage.isEmpty {
                                     Text(med.dosage)
                                         .font(.caption2)
                                         .foregroundStyle(Theme.textTertiary)
@@ -484,7 +507,7 @@ struct NutritionView: View {
 
                             Spacer()
 
-                            Text(time)
+                            Text(MedicationTimeFormatter.display(time))
                                 .font(.caption.weight(.medium).monospacedDigit())
                                 .foregroundStyle(Theme.textSecondary)
                         }
@@ -492,6 +515,12 @@ struct NutritionView: View {
                     }
                 }
             }
+
+            Divider().padding(.vertical, 4)
+            MedicationAdherenceChart(history: medHistory, days: $medHistoryDays, errorMessage: medHistoryError)
+                .onChange(of: medHistoryDays) { _, _ in
+                    Task { await loadMedHistory() }
+                }
         }
         .padding(20)
         .card()
@@ -659,8 +688,18 @@ struct NutritionView: View {
     private func loadData() async {
         async let health: () = healthKit?.fetchAll(for: selectedDate) ?? ()
         async let meds = medClient.fetchTodaySchedule()
+        async let history = medClient.fetchHistory(days: medHistoryDays)
         _ = await health
         todayMeds = await meds
+        let result = await history
+        medHistory = result.days
+        medHistoryError = result.errorMessage
+    }
+
+    private func loadMedHistory() async {
+        let result = await medClient.fetchHistory(days: medHistoryDays)
+        medHistory = result.days
+        medHistoryError = result.errorMessage
     }
 
     private var carbReferenceCard: some View {

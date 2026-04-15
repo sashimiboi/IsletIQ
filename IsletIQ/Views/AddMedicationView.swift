@@ -11,6 +11,8 @@ struct AddMedicationView: View {
     @State private var frequency = "daily"
     @State private var scheduleTimes: [Date] = [Calendar.current.date(from: DateComponents(hour: 8, minute: 0))!]
     @State private var notes = ""
+    @State private var dueWeekday: Int = 1    // default Monday
+    @State private var dueDayOfMonth: Int = 1
     @State private var saving = false
 
     private let medClient = MedicationClient()
@@ -20,10 +22,19 @@ struct AddMedicationView: View {
         ("thyroid", "Thyroid"), ("vitamin", "Vitamin"), ("supplement", "Supplement"),
     ]
 
-    private let frequencies = [
-        ("daily", "Daily"), ("twice_daily", "Twice daily"),
-        ("three_times", "3x daily"), ("weekly", "Weekly"), ("as_needed", "As needed"),
+    private let frequencies: [(String, String, Int)] = [
+        ("daily", "Daily", 1),
+        ("twice_daily", "Twice daily", 1),
+        ("three_times", "3x daily", 1),
+        ("weekly", "Weekly", 7),
+        ("biweekly", "Every 2 weeks", 14),
+        ("monthly", "Monthly", 30),
+        ("as_needed", "As needed", 0),
     ]
+
+    private var selectedInterval: Int {
+        frequencies.first { $0.0 == frequency }?.2 ?? 1
+    }
 
     var body: some View {
         NavigationStack {
@@ -78,6 +89,46 @@ struct AddMedicationView: View {
                                 }
                             }
                             .tint(Theme.primary)
+                        }
+
+                        if frequency == "weekly" || frequency == "biweekly" {
+                            HStack {
+                                Text("On")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Theme.textSecondary)
+                                Spacer()
+                                Picker("", selection: $dueWeekday) {
+                                    Text("Sunday").tag(0)
+                                    Text("Monday").tag(1)
+                                    Text("Tuesday").tag(2)
+                                    Text("Wednesday").tag(3)
+                                    Text("Thursday").tag(4)
+                                    Text("Friday").tag(5)
+                                    Text("Saturday").tag(6)
+                                }
+                                .tint(Theme.primary)
+                            }
+                        }
+
+                        if frequency == "monthly" {
+                            HStack {
+                                Text("On day")
+                                    .font(.subheadline)
+                                    .foregroundStyle(Theme.textSecondary)
+                                Spacer()
+                                Picker("", selection: $dueDayOfMonth) {
+                                    ForEach(1...31, id: \.self) { d in
+                                        Text("\(d)").tag(d)
+                                    }
+                                }
+                                .tint(Theme.primary)
+                            }
+                        }
+
+                        if selectedInterval > 1 {
+                            Text("\(frequencies.first { $0.0 == frequency }?.1 ?? "") meds only show on their due day.")
+                                .font(.caption2)
+                                .foregroundStyle(Theme.textTertiary)
                         }
 
                         Divider()
@@ -171,6 +222,8 @@ struct AddMedicationView: View {
                     if scheduleTimes.isEmpty {
                         scheduleTimes = [Calendar.current.date(from: DateComponents(hour: 8))!]
                     }
+                    if let wday = med.dueWeekday { dueWeekday = wday }
+                    if let dom = med.dueDayOfMonth { dueDayOfMonth = dom }
                 }
             }
         }
@@ -182,16 +235,23 @@ struct AddMedicationView: View {
         formatter.dateFormat = "HH:mm"
         let times = scheduleTimes.map { formatter.string(from: $0) }
 
+        let wday: Int? = (frequency == "weekly" || frequency == "biweekly") ? dueWeekday : nil
+        let dom: Int? = (frequency == "monthly") ? dueDayOfMonth : nil
+
         if let med = editing {
             _ = await medClient.updateMedication(
                 id: med.id, name: name, dosage: dosage,
                 category: category, frequency: frequency,
-                scheduleTimes: times, notes: notes
+                scheduleTimes: times, notes: notes,
+                intervalDays: selectedInterval,
+                dueWeekday: wday, dueDayOfMonth: dom
             )
         } else {
             _ = await medClient.createMedication(
                 name: name, dosage: dosage, category: category,
-                frequency: frequency, scheduleTimes: times, notes: notes
+                frequency: frequency, scheduleTimes: times, notes: notes,
+                intervalDays: selectedInterval,
+                dueWeekday: wday, dueDayOfMonth: dom
             )
         }
         await MainActor.run {

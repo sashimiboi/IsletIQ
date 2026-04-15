@@ -24,6 +24,14 @@ struct ContentView: View {
     private let medicationClient = MedicationClient()
 
     var body: some View {
+        mainBody
+            .onReceive(NotificationCenter.default.publisher(for: .authStateDidChange)) { _ in
+                isAuthenticated = APIConfig.authToken != nil
+            }
+    }
+
+    @ViewBuilder
+    private var mainBody: some View {
         if !isAuthenticated {
             AuthView {
                 isAuthenticated = true

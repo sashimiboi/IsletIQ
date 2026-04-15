@@ -1,8 +1,12 @@
 import Foundation
 
+extension Notification.Name {
+    static let authStateDidChange = Notification.Name("IsletIQAuthStateDidChange")
+}
+
 @Observable
 class AuthManager {
-    var isLoggedIn: Bool { token != nil }
+    var isLoggedIn: Bool = APIConfig.authToken != nil
     var token: String? { APIConfig.authToken }
     var userName: String = ""
     var userEmail: String = ""
@@ -55,6 +59,7 @@ class AuthManager {
                 userName = auth.user?.name ?? ""
                 userEmail = auth.user?.email ?? ""
                 userTier = auth.user?.tier ?? "trial"
+                isLoggedIn = true
                 return true
             } else {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -91,6 +96,7 @@ class AuthManager {
                 userName = auth.user?.name ?? ""
                 userEmail = auth.user?.email ?? ""
                 userTier = auth.user?.tier ?? "trial"
+                isLoggedIn = true
                 return true
             } else {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -123,5 +129,14 @@ class AuthManager {
         userName = ""
         userEmail = ""
         userTier = "trial"
+        isLoggedIn = false
+        NotificationCenter.default.post(name: .authStateDidChange, object: nil)
+    }
+
+    /// Call from any client when a request returns 401. Clears stale Keychain token
+    /// and broadcasts so the root view swaps back to AuthView.
+    static func handleUnauthorized() {
+        APIConfig.authToken = nil
+        NotificationCenter.default.post(name: .authStateDidChange, object: nil)
     }
 }

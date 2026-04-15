@@ -349,8 +349,9 @@ final class HealthKitManager {
                     if !isDupe { deduped.append(meal) }
                 }
 
-                Task { @MainActor in
-                    self.recentMeals = deduped
+                let finalDeduped = deduped
+                Task { @MainActor [finalDeduped] in
+                    self.recentMeals = finalDeduped
                     continuation.resume()
                 }
             }
@@ -603,13 +604,12 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(hour: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var hourly: [(hour: Int, steps: Int)] = []
-                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
+                let hourly: [(hour: Int, steps: Int)] = (results?.statistics() ?? []).map { stats in
                     let hour = cal.component(.hour, from: stats.startDate)
                     let steps = Int(stats.sumQuantity()?.doubleValue(for: .count()) ?? 0)
-                    hourly.append((hour: hour, steps: steps))
+                    return (hour: hour, steps: steps)
                 }
-                Task { @MainActor in
+                Task { @MainActor [hourly] in
                     self.hourlySteps = hourly
                     continuation.resume()
                 }
@@ -634,12 +634,11 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(day: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var daily: [(date: Date, steps: Int)] = []
-                results?.enumerateStatistics(from: sevenDaysAgo, to: .now) { stats, _ in
+                let daily: [(date: Date, steps: Int)] = (results?.statistics() ?? []).map { stats in
                     let steps = Int(stats.sumQuantity()?.doubleValue(for: .count()) ?? 0)
-                    daily.append((date: stats.startDate, steps: steps))
+                    return (date: stats.startDate, steps: steps)
                 }
-                Task { @MainActor in
+                Task { @MainActor [daily] in
                     self.weeklySteps = daily
                     continuation.resume()
                 }
@@ -664,13 +663,12 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(hour: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var hourly: [(hour: Int, cals: Double)] = []
-                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
+                let hourly: [(hour: Int, cals: Double)] = (results?.statistics() ?? []).map { stats in
                     let hour = cal.component(.hour, from: stats.startDate)
                     let cals = stats.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
-                    hourly.append((hour: hour, cals: cals))
+                    return (hour: hour, cals: cals)
                 }
-                Task { @MainActor in
+                Task { @MainActor [hourly] in
                     self.hourlyCals = hourly
                     continuation.resume()
                 }
@@ -693,12 +691,11 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(day: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var daily: [(date: Date, cals: Double)] = []
-                results?.enumerateStatistics(from: thirtyDaysAgo, to: .now) { stats, _ in
+                let daily: [(date: Date, cals: Double)] = (results?.statistics() ?? []).map { stats in
                     let cals = stats.sumQuantity()?.doubleValue(for: .kilocalorie()) ?? 0
-                    daily.append((date: stats.startDate, cals: cals))
+                    return (date: stats.startDate, cals: cals)
                 }
-                Task { @MainActor in
+                Task { @MainActor [daily] in
                     self.weeklyCals = daily
                     continuation.resume()
                 }
@@ -773,13 +770,11 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(hour: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var hourly: [(date: Date, value: Double)] = []
-                results?.enumerateStatistics(from: startOfDay, to: .now) { stats, _ in
-                    if let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 {
-                        hourly.append((date: stats.startDate, value: avg))
-                    }
+                let hourly: [(date: Date, value: Double)] = (results?.statistics() ?? []).compactMap { stats in
+                    guard let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 else { return nil }
+                    return (date: stats.startDate, value: avg)
                 }
-                Task { @MainActor in
+                Task { @MainActor [hourly] in
                     self.heartRateHourly = hourly
                     continuation.resume()
                 }
@@ -797,13 +792,11 @@ final class HealthKitManager {
                 intervalComponents: DateComponents(day: 1)
             )
             query.initialResultsHandler = { _, results, _ in
-                var daily: [(date: Date, value: Double)] = []
-                results?.enumerateStatistics(from: thirtyDaysAgo, to: .now) { stats, _ in
-                    if let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 {
-                        daily.append((date: stats.startDate, value: avg))
-                    }
+                let daily: [(date: Date, value: Double)] = (results?.statistics() ?? []).compactMap { stats in
+                    guard let avg = stats.averageQuantity()?.doubleValue(for: bpmUnit), avg > 0 else { return nil }
+                    return (date: stats.startDate, value: avg)
                 }
-                Task { @MainActor in
+                Task { @MainActor [daily] in
                     self.heartRateDaily = daily
                     continuation.resume()
                 }
