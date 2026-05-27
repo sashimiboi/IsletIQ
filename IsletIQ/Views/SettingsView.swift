@@ -1,5 +1,20 @@
 import SwiftUI
+import SwiftData
 import UserNotifications
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
+
+private func openExternalURL(_ url: URL) {
+    #if canImport(UIKit)
+    UIApplication.shared.open(url)
+    #elseif canImport(AppKit)
+    NSWorkspace.shared.open(url)
+    #endif
+}
 
 // MARK: - Settings Tabs
 
@@ -103,6 +118,8 @@ struct GeneralSettingsContent: View {
     @AppStorage("notifPump") private var notifPump = true
     @AppStorage("notifSupply") private var notifSupply = true
     @AppStorage("notifMeals") private var notifMeals = true
+    @State private var cohort: Cohort = AuthManager.currentCohort
+    @State private var authManager = AuthManager()
 
     var body: some View {
         // Profile
@@ -156,6 +173,19 @@ struct GeneralSettingsContent: View {
                 .foregroundStyle(Theme.textPrimary)
                 .padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 12)
 
+            SettingRow(icon: "person.text.rectangle", label: "Profile Type") {
+                Picker("", selection: $cohort) {
+                    ForEach(Cohort.allCases) { c in
+                        Text(c.shortLabel).tag(c)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(Theme.primary)
+                .onChange(of: cohort) { _, newValue in
+                    Task { _ = await authManager.updateCohort(newValue) }
+                }
+            }
+            Divider().padding(.leading, 52)
             SettingRow(icon: "ruler", label: "Unit") {
                 Picker("", selection: $unitPreference) {
                     Text("mg/dL").tag("mg/dL")
@@ -177,10 +207,12 @@ struct GeneralSettingsContent: View {
                 Toggle("", isOn: $notifCGM).labelsHidden().tint(Theme.primary).scaleEffect(0.85)
             }
             Divider().padding(.leading, 52)
-            SettingRow(icon: "drop.circle", label: "Pump Alerts") {
-                Toggle("", isOn: $notifPump).labelsHidden().tint(Theme.primary).scaleEffect(0.85)
+            if cohort == .t1d {
+                SettingRow(icon: "drop.circle", label: "Pump Alerts") {
+                    Toggle("", isOn: $notifPump).labelsHidden().tint(Theme.primary).scaleEffect(0.85)
+                }
+                Divider().padding(.leading, 52)
             }
-            Divider().padding(.leading, 52)
             SettingRow(icon: "shippingbox", label: "Supply Alerts") {
                 Toggle("", isOn: $notifSupply).labelsHidden().tint(Theme.primary).scaleEffect(0.85)
             }
@@ -215,7 +247,7 @@ struct GeneralSettingsContent: View {
             SettingRow(icon: "doc.text", label: "Privacy Policy") {
                 Button {
                     if let url = URL(string: "https://isletiq.com/privacy") {
-                        UIApplication.shared.open(url)
+                        openExternalURL(url)
                     }
                 } label: {
                     Image(systemName: "arrow.up.right")
@@ -227,9 +259,17 @@ struct GeneralSettingsContent: View {
             SettingRow(icon: "doc.plaintext", label: "Terms of Service") {
                 Button {
                     if let url = URL(string: "https://isletiq.com/terms") {
-                        UIApplication.shared.open(url)
+                        openExternalURL(url)
                     }
                 } label: {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+            }
+            Divider().padding(.leading, 52)
+            SettingRow(icon: "envelope", label: "Send Feedback") {
+                Button(action: openFeedbackEmail) {
                     Image(systemName: "arrow.up.right")
                         .font(.caption)
                         .foregroundStyle(Theme.textTertiary)
@@ -300,6 +340,17 @@ struct GeneralSettingsContent: View {
         UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
         UserDefaults.standard.removeObject(forKey: "elevenlabs_voice_id")
     }
+
+    private func openFeedbackEmail() {
+        let info = Bundle.main.infoDictionary
+        let version = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        let build = (info?["CFBundleVersion"] as? String) ?? "?"
+        let raw = "IsletIQ feedback (v\(version) build \(build))"
+        let subject = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "IsletIQ%20feedback"
+        if let url = URL(string: "mailto:feedback@isletiq.com?subject=\(subject)") {
+            openExternalURL(url)
+        }
+    }
 }
 
 // MARK: - Devices Settings (CGM/Pump Connection)
@@ -310,6 +361,13 @@ struct DevicesSettingsContent: View {
     @State private var showLibreLogin = false
     @State private var showNightscoutLogin = false
     @State private var showTidepoolLogin = false
+    @State private var showGlookoLogin = false
+    @State private var showGlookoDisconnect = false
+    @State private var glookoDisconnectCounter = 0
+    // Drives the "Connected" state off UserDefaults so the card re-renders
+    // automatically when importArchive → recordSync stamps a new value.
+    @AppStorage("glooko_last_sync") private var glookoLastSync: Double = 0
+    @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         // Dexcom G7 — real connection
@@ -453,14 +511,49 @@ struct DevicesSettingsContent: View {
         )
         .sheet(isPresented: $showTidepoolLogin) { TidepoolLoginView() }
 
-        // Omnipod 5
-        DeviceIntegrationCard(
-            name: "Omnipod 5",
-            icon: "circle.hexagongrid.fill",
-            description: "Pump data via HealthKit (automatic when Omnipod app is installed)",
-            status: "HealthKit",
-            statusColor: Theme.normal
-        )
+        // Glooko — glookoLastSync is observed via @AppStorage so the card
+        // auto-updates the moment recordSync() writes to UserDefaults.
+        let glookoConnected = glookoLastSync > 0
+        VStack(spacing: 6) {
+            DeviceIntegrationCard(
+                name: "Glooko",
+                icon: "chart.bar.doc.horizontal.fill",
+                description: "Sign in to Glooko to import CGM, bolus, and insulin CSV reports",
+                status: glookoConnected ? "Connected" : "Available",
+                statusColor: glookoConnected ? Theme.normal : Theme.teal,
+                onConnect: { showGlookoLogin = true }
+            )
+            .id(glookoDisconnectCounter) // force re-render after disconnect
+
+            if glookoConnected {
+                Button {
+                    showGlookoDisconnect = true
+                } label: {
+                    Text("Disconnect Glooko")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.high)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                        .padding(.trailing, 8)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .sheet(isPresented: $showGlookoLogin) { GlookoLoginView() }
+        .confirmationDialog(
+            "Disconnect Glooko?",
+            isPresented: $showGlookoDisconnect,
+            titleVisibility: .visible
+        ) {
+            Button("Disconnect and clear imported data", role: .destructive) {
+                Task { await disconnectGlooko(wipeData: true) }
+            }
+            Button("Just sign out (keep data on device)") {
+                Task { await disconnectGlooko(wipeData: false) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Clearing imported data removes all CGM and insulin rows Glooko contributed. Only keep them if you plan to reconnect the same Glooko account.")
+        }
 
         // Tandem t:slim
         DeviceIntegrationCard(
@@ -481,6 +574,40 @@ struct DevicesSettingsContent: View {
             statusColor: Theme.textTertiary,
             onConnect: { showTidepoolLogin = true }
         )
+
+        // Twiist
+        DeviceIntegrationCard(
+            name: "Twiist",
+            icon: "circle.circle.fill",
+            description: "Sequel Med Tech Twiist AID pump data via Tidepool",
+            status: "Via Tidepool",
+            statusColor: Theme.textTertiary,
+            onConnect: { showTidepoolLogin = true }
+        )
+    }
+
+    @MainActor
+    private func disconnectGlooko(wipeData: Bool) async {
+        await GlookoClient.clearSession()
+        if wipeData {
+            // Only delete rows that Glooko imported. Manual entries, Dexcom
+            // Share readings, HealthKit data, and seeded mock data all stay
+            // because they have importOrigin == "" (or any non-"glooko" value).
+            let cgm = try? modelContext.fetch(FetchDescriptor<GlucoseReading>(
+                predicate: #Predicate { $0.importOrigin == "glooko" }
+            ))
+            for reading in cgm ?? [] {
+                modelContext.delete(reading)
+            }
+            let insulin = try? modelContext.fetch(FetchDescriptor<InsulinEntry>(
+                predicate: #Predicate { $0.sourceRaw == "glooko" }
+            ))
+            for entry in insulin ?? [] {
+                modelContext.delete(entry)
+            }
+            try? modelContext.save()
+        }
+        glookoDisconnectCounter += 1
     }
 }
 

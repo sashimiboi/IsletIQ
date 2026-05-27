@@ -7,9 +7,13 @@
 
 import SwiftUI
 import SwiftData
-import BackgroundTasks
 import UserNotifications
+#if os(iOS)
+import UIKit
+import BackgroundTasks
+#endif
 
+#if os(iOS)
 // Show notifications even while app is in foreground
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -21,16 +25,20 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         completionHandler([.banner, .sound, .badge])
     }
 }
+#endif
 
 @main
 struct IsletIQApp: App {
+    #if os(iOS)
     // Background task identifier
     static let bgTaskID = "com.isletiq.refresh"
+    #endif
     @State private var containerError: String?
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             GlucoseReading.self,
+            InsulinEntry.self,
         ])
 
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
@@ -52,7 +60,9 @@ struct IsletIQApp: App {
         }
     }()
 
+    #if os(iOS)
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #endif
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -61,20 +71,45 @@ struct IsletIQApp: App {
                 .environment(\.colorScheme, .light)
                 .preferredColorScheme(.light)
                 .onAppear {
+                    #if os(iOS)
                     registerBackgroundTasks()
+                    #endif
                 }
         }
         .modelContainer(sharedModelContainer)
         .onChange(of: scenePhase) { _, newPhase in
-            // Reset per-session insulin disclaimer ack when the app
-            // goes to background, so the user must re-acknowledge on
-            // their next session (App Store guideline 1.4.1).
-            if newPhase == .background {
+            switch newPhase {
+            case .background:
+                // Reset per-session insulin disclaimer ack when the app
+                // goes to background, so the user must re-acknowledge on
+                // their next session (App Store guideline 1.4.1).
                 InsulinDisclaimerManager.shared.resetForNewSession()
+            case .active:
+                // Opportunistic Glooko sync on every foreground. Self-throttles
+                // to once per hour; no-ops if Glooko isn't connected.
+                Task { @MainActor in
+                    GlookoSyncManager.shared.performSyncIfNeeded(
+                        modelContext: sharedModelContainer.mainContext
+                    )
+                }
+                // Libre / Nightscout / Tidepool foreground pulls. Each no-ops
+                // if the user has not connected that integration.
+                Task { @MainActor in
+                    let ctx = sharedModelContainer.mainContext
+                    let libre = LibreManager()
+                    if libre.isLoggedIn { await libre.fetchLatest(modelContext: ctx) }
+                    let ns = NightscoutManager()
+                    if ns.isLoggedIn { await ns.fetchLatest(modelContext: ctx) }
+                    let tp = TidepoolManager()
+                    if tp.isLoggedIn { await tp.fetchLatest(modelContext: ctx) }
+                }
+            default:
+                break
             }
         }
     }
 
+    #if os(iOS)
     private func registerBackgroundTasks() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: Self.bgTaskID, using: nil) { task in
             guard let bgTask = task as? BGAppRefreshTask else { return }
@@ -92,8 +127,10 @@ struct IsletIQApp: App {
             print("[bg] Schedule error: \(error)")
         }
     }
+    #endif
 }
 
+#if os(iOS)
 // Background refresh handler
 private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
     // Schedule the next one
@@ -122,6 +159,27 @@ private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
         }
         notifications.checkSupplies(mapped)
 
+        // Opportunistic pulls for Libre, Nightscout, Tidepool. Each manager
+        // is @MainActor so we hop briefly to check connection state and run
+        // its fetch on its own SwiftData context.
+        let bgContainer = try? ModelContainer(
+            for: GlucoseReading.self, InsulinEntry.self
+        )
+        if let ctx = bgContainer?.mainContext {
+            let libre = await MainActor.run { LibreManager() }
+            if await MainActor.run(body: { libre.isLoggedIn }) {
+                await libre.fetchLatest(modelContext: ctx)
+            }
+            let ns = await MainActor.run { NightscoutManager() }
+            if await MainActor.run(body: { ns.isLoggedIn }) {
+                await ns.fetchLatest(modelContext: ctx)
+            }
+            let tp = await MainActor.run { TidepoolManager() }
+            if await MainActor.run(body: { tp.isLoggedIn }) {
+                await tp.fetchLatest(modelContext: ctx)
+            }
+        }
+
         task.setTaskCompleted(success: true)
     }
 
@@ -130,3 +188,4 @@ private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
         task.setTaskCompleted(success: false)
     }
 }
+#endif

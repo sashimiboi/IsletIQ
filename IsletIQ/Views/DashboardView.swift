@@ -17,35 +17,69 @@ struct ReadingPoint: Identifiable {
 }
 
 enum ChartRange: String, CaseIterable {
-    case threeHr = "3h"
-    case day = "24h"
+    case day = "1d"
     case threeDays = "3d"
-    case week = "7d"
     case fourteenDays = "14d"
+    case thirtyDays = "30d"
 
     var seconds: TimeInterval {
         switch self {
-        case .threeHr: 3 * 3600
         case .day: 86400
         case .threeDays: 3 * 86400
-        case .week: 7 * 86400
         case .fourteenDays: 14 * 86400
+        case .thirtyDays: 30 * 86400
         }
+    }
+
+    /// True when the range spans more than one calendar day, so axis
+    /// labels should include the date instead of just the time.
+    var isMultiDay: Bool {
+        switch self {
+        case .day, .threeDays: false
+        case .fourteenDays, .thirtyDays: true
+        }
+    }
+
+    /// Bin width for bar chart aggregation. 1-2 day ranges show hourly
+    /// bars; multi-day ranges show one bar per calendar day.
+    var binComponent: Calendar.Component {
+        isMultiDay ? .day : .hour
     }
 }
 
 struct DashboardView: View {
     @Query var storedReadings: [GlucoseReading]
+    @Query var storedBoluses: [InsulinEntry]
     var dexcomManager: DexcomManager?
     var healthKit: HealthKitManager?
+
+    // Omnipod 5 doesn't write insulin to HealthKit, so the HealthKitManager
+    // totals stay at 0. The backend aggregates Glooko-imported pump data at
+    // /api/pump/latest — PumpView already uses this; the dashboard mirrors it.
+    @State private var backendPump: PumpSummary?
+
+    struct PumpSummary {
+        let basalRate: Double
+        let lastBolus: Double
+        let totalBasal: Double
+        let totalBolus: Double
+        let dailyTotal: Double
+    }
 
     init(dexcomManager: DexcomManager? = nil, healthKit: HealthKitManager? = nil) {
         self.dexcomManager = dexcomManager
         self.healthKit = healthKit
-        // Only fetch last 14 days to keep the dashboard fast
-        let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: .now)!
+        // Last 30 days covers every chartRange option without re-querying
+        let cutoff = Calendar.current.date(byAdding: .day, value: -30, to: .now)!
         _storedReadings = Query(
             filter: #Predicate<GlucoseReading> { $0.timestamp >= cutoff },
+            sort: \.timestamp,
+            order: .reverse
+        )
+        _storedBoluses = Query(
+            filter: #Predicate<InsulinEntry> {
+                $0.timestamp >= cutoff && $0.kindRaw == "bolus"
+            },
             sort: \.timestamp,
             order: .reverse
         )
@@ -73,16 +107,18 @@ struct DashboardView: View {
                 guard let ts = r.timestamp else { return nil }
                 return ReadingPoint(value: r.safeValue, timestamp: ts, trend: r.trendArrow)
             }
-            // For ranges beyond live data, supplement with stored
+            // For ranges beyond live data, supplement with stored. Cap at
+            // 5000 to cover the full 14-day query window (~4032 pts at 5-min
+            // intervals) without chopping the oldest days off on 14d view.
             let liveMinTime = livePoints.last?.timestamp ?? Date()
             let stored = storedReadings
                 .filter { $0.timestamp < liveMinTime }
-                .prefix(2000) // cap for performance
+                .prefix(5000)
                 .map { ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow) }
             return livePoints + stored
         }
-        // Fallback to stored only
-        return storedReadings.prefix(2000).map {
+        // Fallback to stored only — same cap.
+        return storedReadings.prefix(5000).map {
             ReadingPoint(value: $0.value, timestamp: $0.timestamp, trend: $0.trendArrow)
         }
     }
@@ -111,7 +147,9 @@ struct DashboardView: View {
         ScrollView {
             VStack(spacing: 14) {
                 cgmCard
-                pumpStatusCard
+                if AuthManager.currentCohort == .t1d {
+                    pumpStatusCard
+                }
                 glucoseChartCard
                 statsRow
                 distributionCard
@@ -127,11 +165,32 @@ struct DashboardView: View {
         .navigationBarTitleDisplayMode(.large)
         #endif
         .tint(Theme.primary)
+        .task { await loadPumpStatus() }
         .refreshable {
             if let mgr = dexcomManager {
                 await mgr.fetchLatest()
             }
+            await loadPumpStatus()
         }
+    }
+
+    private func loadPumpStatus() async {
+        guard let url = URL(string: "\(APIConfig.baseURL)/api/pump/latest") else { return }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            let summary = PumpSummary(
+                basalRate:  (json["basalRate"]  as? NSNumber)?.doubleValue ?? 0,
+                lastBolus:  (json["lastBolus"]  as? NSNumber)?.doubleValue ?? 0,
+                totalBasal: (json["totalBasal"] as? NSNumber)?.doubleValue ?? 0,
+                totalBolus: (json["totalBolus"] as? NSNumber)?.doubleValue ?? 0,
+                dailyTotal: (json["dailyTotal"] as? NSNumber)?.doubleValue ?? 0
+            )
+            await MainActor.run { self.backendPump = summary }
+        } catch {}
     }
 
     // MARK: - CGM Card
@@ -230,6 +289,24 @@ struct DashboardView: View {
 
     // MARK: - Pump Status
 
+    // Prefer backend (Glooko-imported Omnipod data); fall back to HealthKit
+    // (only useful for HK-writing pumps) and storedBoluses for "last bolus".
+    private var pumpBasalRate: Double {
+        backendPump?.basalRate ?? healthKit?.basalRateEstimate ?? 0
+    }
+    private var pumpLastBolus: Double {
+        if let b = backendPump?.lastBolus, b > 0 { return b }
+        if let hk = healthKit?.lastBolusUnits, hk > 0 { return hk }
+        return storedBoluses.first?.units ?? 0
+    }
+    private var pumpDailyTotal: Double {
+        if let dt = backendPump?.dailyTotal, dt > 0 { return dt }
+        let hkTotal = (healthKit?.totalBasalToday ?? 0) + (healthKit?.totalBolusToday ?? 0)
+        if hkTotal > 0 { return hkTotal }
+        let startOfDay = Calendar.current.startOfDay(for: .now)
+        return storedBoluses.filter { $0.timestamp >= startOfDay }.reduce(0) { $0 + $1.units }
+    }
+
     private var pumpStatusCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -246,11 +323,11 @@ struct DashboardView: View {
             }
 
             HStack(spacing: 20) {
-                PumpStat(icon: "waveform.path", label: "Basal", value: "\(String(format: "%.2f", healthKit?.basalRateEstimate ?? 0)) u/hr")
+                PumpStat(icon: "waveform.path", label: "Basal", value: "\(String(format: "%.2f", pumpBasalRate)) u/hr")
                 Divider().frame(height: 32)
-                PumpStat(icon: "syringe.fill", label: "Last Bolus", value: "\(String(format: "%.1f", healthKit?.lastBolusUnits ?? 0))u")
+                PumpStat(icon: "syringe.fill", label: "Last Bolus", value: "\(String(format: "%.1f", pumpLastBolus))u")
                 Divider().frame(height: 32)
-                PumpStat(icon: "chart.bar.fill", label: "Daily Total", value: "\(String(format: "%.1f", (healthKit?.totalBasalToday ?? 0) + (healthKit?.totalBolusToday ?? 0)))u")
+                PumpStat(icon: "chart.bar.fill", label: "Daily Total", value: "\(String(format: "%.1f", pumpDailyTotal))u")
             }
         }
         .padding(20)
@@ -274,9 +351,15 @@ struct DashboardView: View {
 
     private var bolusPointsForRange: [BolusPoint] {
         let cutoff = Date().addingTimeInterval(-chartRange.seconds)
+        let real = storedBoluses
+            .filter { $0.timestamp >= cutoff }
+            .map { BolusPoint(timestamp: $0.timestamp, units: $0.units, carbs: Int($0.carbs)) }
+        // Fall back to mock data only if we have absolutely no real boluses
+        // stored yet (first-launch demo state).
+        if !real.isEmpty { return real }
         return MockData.bolusData()
             .filter { $0.timestamp >= cutoff }
-            .map { BolusPoint(timestamp: $0.timestamp, units: $0.insulinDelivered, carbs: $0.carbs) }
+            .map { BolusPoint(timestamp: $0.timestamp, units: $0.insulinDelivered, carbs: Int($0.carbs)) }
     }
 
     private var glucoseChartCard: some View {
@@ -318,26 +401,8 @@ struct DashboardView: View {
 
                 Divider().frame(height: 16)
 
-                // Range pills
-                if chartMode == .trend {
-                    ForEach(ChartRange.allCases, id: \.self) { range in
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) { chartRange = range }
-                        } label: {
-                            Text(range.rawValue)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(chartRange == range ? .white : Theme.textSecondary)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    chartRange == range ? Theme.primary.opacity(0.7) : Theme.muted,
-                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                } else {
-                    // AGP standard: fixed 14-day reporting period per clinical guidelines
+                // Range pills (Trend + Bar share the 1d/2d/14d/30d set; AGP is fixed)
+                if chartMode == .agp {
                     Text("14 days")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white)
@@ -347,6 +412,8 @@ struct DashboardView: View {
                             Theme.primary.opacity(0.7),
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
+                } else {
+                    ChartRangePicker(selection: $chartRange)
                 }
                 Spacer()
             }
@@ -366,19 +433,21 @@ struct DashboardView: View {
                     ChartLegend(color: .green.opacity(0.5), label: "Target")
                 }
             } else if chartData.isEmpty {
-                Text("No data available")
+                Text("No readings in selected range")
                     .font(.caption)
                     .foregroundStyle(Theme.textTertiary)
                     .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 let bolusData = bolusPointsForRange
-                StackedChartView(glucosePoints: chartData, bolusPoints: bolusData)
+                StackedChartView(glucosePoints: chartData, bolusPoints: bolusData, range: chartRange)
                     .frame(height: 240)
 
                 HStack(spacing: 12) {
-                    ChartLegend(color: Theme.primary, label: "Glucose")
+                    ChartLegend(color: Theme.low, label: "Low")
+                    ChartLegend(color: Theme.primary, label: "In Range")
+                    ChartLegend(color: Theme.elevated, label: "Elevated")
+                    ChartLegend(color: Theme.high, label: "High")
                     ChartLegend(color: Theme.teal.opacity(0.5), label: "Insulin")
-                    ChartLegend(color: Theme.teal.opacity(0.3), label: "Carbs")
                 }
             }
         }
@@ -484,26 +553,21 @@ struct DashboardView: View {
                     }
                 }
             } else {
-                let recentBolus = MockData.bolusData()
-                    .sorted { $0.timestamp > $1.timestamp }
-                    .prefix(8)
-
-                if recentBolus.isEmpty {
-                    Text("No pump data")
-                        .font(.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                } else {
-                    ForEach(Array(recentBolus.enumerated()), id: \.offset) { i, bolus in
+                // Prefer real stored boluses (HealthKit/Glooko); fall back to
+                // mock data only on first launch before any sync has landed.
+                let realBolus = Array(storedBoluses.prefix(8))
+                if !realBolus.isEmpty {
+                    ForEach(Array(realBolus.enumerated()), id: \.element.id) { i, bolus in
                         HStack(spacing: 8) {
                             Image(systemName: "syringe.fill")
                                 .font(.caption)
                                 .foregroundStyle(Theme.primary)
                                 .frame(width: 16)
-                            Text(String(format: "%.1fu", bolus.insulinDelivered))
+                            Text(String(format: "%.1fu", bolus.units))
                                 .font(.subheadline.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(Theme.textPrimary)
                             if bolus.carbs > 0 {
-                                Text("\(bolus.carbs)g carbs")
+                                Text("\(Int(bolus.carbs))g carbs")
                                     .font(.caption)
                                     .foregroundStyle(Theme.teal)
                             }
@@ -513,8 +577,42 @@ struct DashboardView: View {
                                 .foregroundStyle(Theme.textTertiary)
                         }
                         .padding(.vertical, 2)
-                        if i < recentBolus.count - 1 {
+                        if i < realBolus.count - 1 {
                             Divider()
+                        }
+                    }
+                } else {
+                    let mockBolus = MockData.bolusData()
+                        .sorted { $0.timestamp > $1.timestamp }
+                        .prefix(8)
+                    if mockBolus.isEmpty {
+                        Text("No pump data")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                    } else {
+                        ForEach(Array(mockBolus.enumerated()), id: \.offset) { i, bolus in
+                            HStack(spacing: 8) {
+                                Image(systemName: "syringe.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.primary)
+                                    .frame(width: 16)
+                                Text(String(format: "%.1fu", bolus.insulinDelivered))
+                                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(Theme.textPrimary)
+                                if bolus.carbs > 0 {
+                                    Text("\(bolus.carbs)g carbs")
+                                        .font(.caption)
+                                        .foregroundStyle(Theme.teal)
+                                }
+                                Spacer()
+                                Text(bolus.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute())
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                            .padding(.vertical, 2)
+                            if i < mockBolus.count - 1 {
+                                Divider()
+                            }
                         }
                     }
                 }
@@ -559,6 +657,7 @@ struct LiveReadingRow: View {
 
 struct LiveChartView: View {
     let points: [ReadingPoint]
+    var range: ChartRange = .day
     @State private var selectedIndex: Int? = nil
     @State private var isDragging = false
 
@@ -566,7 +665,7 @@ struct LiveChartView: View {
         GeometryReader { geo in
             let minVal = max(40, (points.map(\.value).min() ?? 70) - 15)
             let maxVal = min(350, (points.map(\.value).max() ?? 180) + 15)
-            let range = CGFloat(maxVal - minVal)
+            let valueRange = CGFloat(maxVal - minVal)
             let w = geo.size.width
             let h = geo.size.height
             let chartL: CGFloat = 30
@@ -580,7 +679,7 @@ struct LiveChartView: View {
                 // Y-axis grid
                 ForEach([70, 120, 180, 250], id: \.self) { line in
                     if line >= minVal && line <= maxVal {
-                        let y = h - (CGFloat(line - minVal) / range) * h
+                        let y = h - (CGFloat(line - minVal) / valueRange) * h
                         Path { p in
                             p.move(to: CGPoint(x: chartL, y: y))
                             p.addLine(to: CGPoint(x: w, y: y))
@@ -594,7 +693,7 @@ struct LiveChartView: View {
                 }
 
                 // Low zone
-                let lowZoneY = h - (CGFloat(70 - minVal) / range) * h
+                let lowZoneY = h - (CGFloat(70 - minVal) / valueRange) * h
                 if 70 > minVal {
                     Rectangle()
                         .fill(Theme.low.opacity(0.06))
@@ -603,8 +702,8 @@ struct LiveChartView: View {
                 }
 
                 // Target range
-                let targetTop = h - (CGFloat(180 - minVal) / range) * h
-                let targetBottom = h - (CGFloat(70 - minVal) / range) * h
+                let targetTop = h - (CGFloat(180 - minVal) / valueRange) * h
+                let targetBottom = h - (CGFloat(70 - minVal) / valueRange) * h
                 Rectangle()
                     .fill(Theme.normal.opacity(0.08))
                     .frame(width: chartW, height: max(0, targetBottom - targetTop))
@@ -612,7 +711,7 @@ struct LiveChartView: View {
 
                 // High zone
                 if 180 < maxVal {
-                    let highTop = h - (CGFloat(min(maxVal, 350) - minVal) / range) * h
+                    let highTop = h - (CGFloat(min(maxVal, 350) - minVal) / valueRange) * h
                     Rectangle()
                         .fill(Theme.high.opacity(0.05))
                         .frame(width: chartW, height: max(0, targetTop - highTop))
@@ -621,14 +720,14 @@ struct LiveChartView: View {
 
                 // Target lines
                 Path { p in
-                    let y70 = h - (CGFloat(70 - minVal) / range) * h
+                    let y70 = h - (CGFloat(70 - minVal) / valueRange) * h
                     p.move(to: CGPoint(x: chartL, y: y70))
                     p.addLine(to: CGPoint(x: w, y: y70))
                 }
                 .stroke(Theme.low.opacity(0.4), style: StrokeStyle(lineWidth: 0.8, dash: [4, 3]))
 
                 Path { p in
-                    let y180 = h - (CGFloat(180 - minVal) / range) * h
+                    let y180 = h - (CGFloat(180 - minVal) / valueRange) * h
                     p.move(to: CGPoint(x: chartL, y: y180))
                     p.addLine(to: CGPoint(x: w, y: y180))
                 }
@@ -638,7 +737,7 @@ struct LiveChartView: View {
                 Path { path in
                     for (i, pt) in points.enumerated() {
                         let x = chartL + chartW * CGFloat(pt.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                        let y = h - (CGFloat(pt.value - minVal) / range) * h
+                        let y = h - (CGFloat(pt.value - minVal) / valueRange) * h
                         if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
@@ -662,7 +761,7 @@ struct LiveChartView: View {
                     var started = false
                     for (i, pt) in points.enumerated() {
                         let x = chartL + chartW * CGFloat(pt.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                        let y = h - (CGFloat(pt.value - minVal) / range) * h
+                        let y = h - (CGFloat(pt.value - minVal) / valueRange) * h
 
                         // Break line at gaps > 15 min
                         if i > 0 {
@@ -686,7 +785,7 @@ struct LiveChartView: View {
                 if let idx = selectedIndex, idx < points.count {
                     let pt = points[idx]
                     let sx = chartL + chartW * CGFloat(pt.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                    let sy = h - (CGFloat(pt.value - minVal) / range) * h
+                    let sy = h - (CGFloat(pt.value - minVal) / valueRange) * h
                     let color = Theme.statusColor(pt.status)
 
                     // Vertical scrubber line
@@ -715,7 +814,7 @@ struct LiveChartView: View {
                 // Latest point (when not scrubbing)
                 if selectedIndex == nil, let last = points.last {
                     let lx = chartL + chartW * CGFloat(last.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                    let ly = h - (CGFloat(last.value - minVal) / range) * h
+                    let ly = h - (CGFloat(last.value - minVal) / valueRange) * h
                     let color = Theme.statusColor(last.status)
 
                     Circle()
@@ -727,11 +826,11 @@ struct LiveChartView: View {
                 }
 
                 // X-axis time labels
-                let labelCount = 5
+                let labelCount = ChartAxisFormat.suggestedLabelCount(for: range)
                 ForEach(0..<labelCount, id: \.self) { i in
                     let t = minTime + timeRange * Double(i) / Double(labelCount - 1)
                     let x = chartL + chartW * CGFloat(i) / CGFloat(labelCount - 1)
-                    Text(Date(timeIntervalSince1970: t), format: .dateTime.hour().minute())
+                    Text(ChartAxisFormat.label(for: Date(timeIntervalSince1970: t), range: range))
                         .font(.system(size: 8).monospacedDigit())
                         .foregroundStyle(Theme.textTertiary)
                         .position(x: x, y: h + 10)

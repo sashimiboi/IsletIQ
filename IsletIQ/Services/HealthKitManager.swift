@@ -552,6 +552,25 @@ final class HealthKitManager {
         }
     }
 
+    // MARK: - Sleep History (multiple nights)
+
+    /// Fetch a SleepData for each of the last `days` nights, oldest first.
+    /// Nights with zero sleep stage data are skipped, so the returned
+    /// array can be shorter than `days`.
+    func fetchSleepHistory(days: Int) async -> [SleepData] {
+        var nights: [SleepData] = []
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: .now)
+        for offset in stride(from: days - 1, through: 0, by: -1) {
+            guard let target = cal.date(byAdding: .day, value: -offset, to: today) else { continue }
+            await fetchLastSleep(for: target)
+            if let s = lastSleep {
+                nights.append(s)
+            }
+        }
+        return nights
+    }
+
     // MARK: - Fetch Steps & Active Calories
 
     func fetchActivityToday(for date: Date = .now) async {

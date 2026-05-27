@@ -49,8 +49,9 @@ struct CardStyle: ViewModifier {
             .background(
                 RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                     .fill(Theme.cardBg)
-                    .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
             )
+            .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+            .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
     }
 }
 

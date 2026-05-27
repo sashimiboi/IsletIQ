@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(WatchConnectivity)
 import WatchConnectivity
+#endif
 
 @Observable
 class WatchSyncManager: NSObject {
@@ -8,16 +10,19 @@ class WatchSyncManager: NSObject {
 
     private override init() {
         super.init()
+        #if canImport(WatchConnectivity)
         if WCSession.isSupported() {
             let session = WCSession.default
             session.delegate = self
             session.activate()
         }
+        #endif
     }
 
     // Send glucose data to watch
     func syncGlucose(value: Int, trend: String, trendSymbol: String, status: String, statusColor: String,
                      sparkline: [Int], tir: Int, avg: Int, readingCount: Int) {
+        #if canImport(WatchConnectivity)
         guard WCSession.default.activationState == .activated else { return }
 
         let context: [String: Any] = [
@@ -53,10 +58,12 @@ class WatchSyncManager: NSObject {
 
         session.transferUserInfo(context)
         print("[watch-sync] UserInfo queued")
+        #endif
     }
 
     // Send supply data to watch
     func syncSupplies(_ supplies: [(name: String, quantity: Int, daysLeft: Int, urgent: Bool)]) {
+        #if canImport(WatchConnectivity)
         guard WCSession.default.activationState == .activated else { return }
 
         let supplyData = supplies.map { s -> [String: Any] in
@@ -67,9 +74,11 @@ class WatchSyncManager: NSObject {
         var context = WCSession.default.applicationContext
         context["supplies"] = supplyData
         try? WCSession.default.updateApplicationContext(context)
+        #endif
     }
 }
 
+#if canImport(WatchConnectivity)
 extension WatchSyncManager: WCSessionDelegate {
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         DispatchQueue.main.async {
@@ -77,11 +86,13 @@ extension WatchSyncManager: WCSessionDelegate {
         }
     }
 
+    #if os(iOS)
     func sessionDidBecomeInactive(_ session: WCSession) {}
     func sessionDidDeactivate(_ session: WCSession) {
         // Reactivate for watch switching
         WCSession.default.activate()
     }
+    #endif
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         DispatchQueue.main.async {
@@ -110,6 +121,7 @@ extension WatchSyncManager: WCSessionDelegate {
         }
     }
 }
+#endif
 
 extension Notification.Name {
     static let watchRequestedUpdate = Notification.Name("watchRequestedUpdate")

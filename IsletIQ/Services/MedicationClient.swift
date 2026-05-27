@@ -52,6 +52,10 @@ actor MedicationClient {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 10
+        // Dose log writes happen seconds before the next history fetch, so
+        // a cached response would show stale taken/expected counts and
+        // make the chart look frozen.
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         APIConfig.applyAuth(to: &request)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -136,11 +140,12 @@ actor MedicationClient {
         } catch { return false }
     }
 
-    func unlogDose(medicationId: Int, scheduledTime: String?) async -> Bool {
+    func unlogDose(medicationId: Int, scheduledTime: String?, date: Date? = nil) async -> Bool {
         var components = URLComponents(string: "\(baseURL)/api/medications/\(medicationId)/doses")
-        if let scheduledTime {
-            components?.queryItems = [URLQueryItem(name: "scheduled_time", value: scheduledTime)]
-        }
+        var items: [URLQueryItem] = []
+        if let scheduledTime { items.append(URLQueryItem(name: "scheduled_time", value: scheduledTime)) }
+        if let date { items.append(URLQueryItem(name: "date", value: Self.isoDateString(date))) }
+        if !items.isEmpty { components?.queryItems = items }
         guard let url = components?.url else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
@@ -151,7 +156,7 @@ actor MedicationClient {
         } catch { return false }
     }
 
-    func logDose(medicationId: Int, scheduledTime: String?, status: String = "taken") async -> Bool {
+    func logDose(medicationId: Int, scheduledTime: String?, status: String = "taken", date: Date? = nil) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications/\(medicationId)/doses") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -159,10 +164,29 @@ actor MedicationClient {
         APIConfig.applyAuth(to: &request)
         var body: [String: Any] = ["status": status]
         if let scheduledTime { body["scheduled_time"] = scheduledTime }
+        if let date { body["taken_at"] = Self.isoDateTimeString(date) }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
         } catch { return false }
+    }
+
+    private static func isoDateString(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone.current
+        return f.string(from: d)
+    }
+
+    private static func isoDateTimeString(_ d: Date) -> String {
+        // For past dates, anchor the time to noon local so timezone slop
+        // doesn't push the dose into the previous or next day on the server.
+        let cal = Calendar.current
+        let anchored = cal.date(bySettingHour: 12, minute: 0, second: 0, of: d) ?? d
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f.string(from: anchored)
     }
 }

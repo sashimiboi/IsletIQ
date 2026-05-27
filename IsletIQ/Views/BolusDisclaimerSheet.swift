@@ -100,7 +100,9 @@ struct BolusDisclaimerSheet: View {
                 .background(Theme.cardBg)
             }
             .navigationTitle("Health Notice")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .interactiveDismissDisabled(true)
         }
     }

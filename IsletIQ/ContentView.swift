@@ -18,8 +18,12 @@ struct ContentView: View {
     @State private var dexcomManager = DexcomManager()
     @State private var healthKit = HealthKitManager()
     @State private var notifications = NotificationManager()
+    @State private var libre = LibreManager()
+    @State private var nightscout = NightscoutManager()
+    @State private var tidepool = TidepoolManager()
     @State private var isAuthenticated = APIConfig.authToken != nil
     @State private var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+    @State private var currentRole: Role = AuthManager.currentRole
     private let watchSync = WatchSyncManager.shared
     private let medicationClient = MedicationClient()
 
@@ -27,6 +31,10 @@ struct ContentView: View {
         mainBody
             .onReceive(NotificationCenter.default.publisher(for: .authStateDidChange)) { _ in
                 isAuthenticated = APIConfig.authToken != nil
+                currentRole = AuthManager.currentRole
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .roleDidChange)) { _ in
+                currentRole = AuthManager.currentRole
             }
     }
 
@@ -35,11 +43,12 @@ struct ContentView: View {
         if !isAuthenticated {
             AuthView {
                 isAuthenticated = true
+                currentRole = AuthManager.currentRole
             }
         } else if !hasCompletedOnboarding {
-            #if os(iOS)
             FirstLaunchView(isComplete: $hasCompletedOnboarding)
-            #endif
+        } else if currentRole.isProvider {
+            ProviderHomeView()
         } else {
         #if os(macOS)
         NavigationSplitView {
@@ -65,8 +74,10 @@ struct ContentView: View {
                                 Button { showingMealLog = true } label: {
                                     Label("Log Meal", systemImage: "fork.knife")
                                 }
-                                Button { showingLogInsulin = true } label: {
-                                    Label("Log Insulin", systemImage: "syringe")
+                                if AuthManager.currentCohort == .t1d {
+                                    Button { showingLogInsulin = true } label: {
+                                        Label("Log Insulin", systemImage: "syringe")
+                                    }
                                 }
                             } label: {
                                 Image(systemName: "plus")
@@ -201,14 +212,11 @@ struct ContentView: View {
     }
 
     private func syncToWatch() {
-        // Use CSV/stored data if no live readings
         let readings: [(value: Int, trend: TrendArrow)] = {
             if !dexcomManager.liveReadings.isEmpty {
                 return dexcomManager.liveReadings.map { (value: $0.safeValue, trend: $0.trendArrow) }
             }
-            // Fall back to MockData
-            let stored = MockData.glucoseReadings()
-            return stored.suffix(288).map { (value: $0.value, trend: $0.trendArrow) }
+            return []
         }()
 
         guard let latest = readings.first else { return }
@@ -398,10 +406,12 @@ struct ContentView: View {
                 } label: {
                     Label("CGM", systemImage: "chart.line.uptrend.xyaxis")
                 }
-                NavigationLink {
-                    PumpView(healthKit: healthKit)
-                } label: {
-                    Label("Pump", systemImage: "cross.vial.fill")
+                if AuthManager.currentCohort == .t1d {
+                    NavigationLink {
+                        PumpView(healthKit: healthKit)
+                    } label: {
+                        Label("Pump", systemImage: "cross.vial.fill")
+                    }
                 }
                 NavigationLink {
                     AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit, medicationClient: medicationClient)
@@ -438,19 +448,14 @@ struct ContentView: View {
     #endif
 
     private func seedIfNeeded() {
-        guard !hasSeeded else { return }
+        // Mock data seeding is disabled in production. New users see an empty
+        // dashboard until they connect a CGM source (Dexcom / Libre /
+        // Nightscout / Tidepool / HealthKit), which prevents fake-looking
+        // graphs and surfaces real data-fetch bugs immediately.
+        //
+        // Re-enable for local debugging only by setting hasSeeded=false and
+        // wrapping the body in #if DEBUG.
         hasSeeded = true
-
-        let descriptor = FetchDescriptor<GlucoseReading>()
-        let count = (try? modelContext.fetchCount(descriptor)) ?? 0
-        guard count == 0 else { return }
-
-        // Only seed last 7 days to keep it fast (not all 19K readings)
-        let cutoff = Calendar.current.date(byAdding: .day, value: -7, to: .now)!
-        let readings = MockData.glucoseReadings().filter { $0.timestamp >= cutoff }
-        for reading in readings {
-            modelContext.insert(reading)
-        }
     }
 }
 

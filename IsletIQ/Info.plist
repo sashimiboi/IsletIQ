@@ -11,7 +11,7 @@
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>IsletIQ writes the meals, carb counts, glucose readings, and insulin doses you log so your full diabetes history lives in Apple Health alongside data from your CGM, pump, and other apps.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>IsletIQ uses the camera to photograph food and supplies for the AI agent.</string>
+	<string>IsletIQ uses the camera so you can photograph meals to estimate carbs and macros, and capture supply labels and barcodes when adding pump pods, sensors, or insulin to your inventory.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>IsletIQ connects to your local AI service for diabetes management agents.</string>
 	<key>NSBonjourServices</key>
@@ -22,20 +22,21 @@
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>192.168.1.87</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-			</dict>
-		</dict>
 	</dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.isletiq.refresh</string>
 	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>IsletLogo</string>
+		<key>UIImageRespectsSafeAreaInsets</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

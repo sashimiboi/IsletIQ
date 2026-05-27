@@ -62,7 +62,9 @@ struct CaloriesDetailView: View {
             }
             .background(Theme.bg)
             .navigationTitle("Active Calories")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

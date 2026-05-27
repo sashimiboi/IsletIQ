@@ -12,6 +12,7 @@ struct StackedChartView: View {
     let glucosePoints: [ReadingPoint]
     let bolusPoints: [BolusPoint]
     let basalRate: Double = 0.5 // u/hr from Omnipod 5
+    var range: ChartRange = .day
 
     @State private var selectedGlucoseIndex: Int? = nil
     @State private var isDragging = false
@@ -67,6 +68,52 @@ struct StackedChartView: View {
     }
     private var timeRange: TimeInterval {
         max(300, maxTime - minTime)
+    }
+
+    private func coloredTrendPaths(
+        minTime: TimeInterval, timeRange: TimeInterval,
+        chartL: CGFloat, chartW: CGFloat, h: CGFloat,
+        minVal: Int, gRange: CGFloat,
+        gapThreshold: TimeInterval
+    ) -> (low: Path, inRange: Path, elevated: Path, high: Path) {
+        var low = Path(), inRange = Path(), elevated = Path(), high = Path()
+        guard glucosePoints.count > 1 else { return (low, inRange, elevated, high) }
+
+        for i in 0..<(glucosePoints.count - 1) {
+            let pt1 = glucosePoints[i]
+            let pt2 = glucosePoints[i + 1]
+            if pt2.timestamp.timeIntervalSince(pt1.timestamp) > gapThreshold { continue }
+
+            let x1 = chartL + chartW * CGFloat(pt1.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
+            let y1 = h - (CGFloat(pt1.value - minVal) / gRange) * h
+            let x2 = chartL + chartW * CGFloat(pt2.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
+            let y2 = h - (CGFloat(pt2.value - minVal) / gRange) * h
+            let p1 = CGPoint(x: x1, y: y1), p2 = CGPoint(x: x2, y: y2)
+
+            let avg = (pt1.value + pt2.value) / 2
+            switch avg {
+            case ..<70:     low.move(to: p1);      low.addLine(to: p2)
+            case 70...180:  inRange.move(to: p1);  inRange.addLine(to: p2)
+            case 181...250: elevated.move(to: p1); elevated.addLine(to: p2)
+            default:        high.move(to: p1);     high.addLine(to: p2)
+            }
+        }
+        return (low, inRange, elevated, high)
+    }
+
+    // Dropout threshold that adapts to data cadence. Floor at 15 min so raw
+    // 5-min CGM data still shows sensor dropouts; 2.5× median covers
+    // downsampled ranges where typical spacing is much larger than 15 min.
+    private var glucoseGapThreshold: TimeInterval {
+        guard glucosePoints.count > 2 else { return 900 }
+        var gaps: [TimeInterval] = []
+        gaps.reserveCapacity(glucosePoints.count - 1)
+        for i in 1..<glucosePoints.count {
+            gaps.append(glucosePoints[i].timestamp.timeIntervalSince(glucosePoints[i - 1].timestamp))
+        }
+        gaps.sort()
+        let median = gaps[gaps.count / 2]
+        return max(900, median * 2.5)
     }
 
     // Insulin y-axis scale
@@ -197,32 +244,23 @@ struct StackedChartView: View {
                     }
                 }
 
-                // --- Glucose line segments colored by range ---
-                // Draw segments between consecutive points, colored by status
-                ForEach(0..<max(0, glucosePoints.count - 1), id: \.self) { i in
-                    let pt1 = glucosePoints[i]
-                    let pt2 = glucosePoints[i + 1]
-                    let gap = pt2.timestamp.timeIntervalSince(pt1.timestamp)
-
-                    if gap <= 900 {
-                        let x1 = chartL + chartW * CGFloat(pt1.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                        let y1 = h - (CGFloat(pt1.value - minVal) / gRange) * h
-                        let x2 = chartL + chartW * CGFloat(pt2.timestamp.timeIntervalSince1970 - minTime) / CGFloat(timeRange)
-                        let y2 = h - (CGFloat(pt2.value - minVal) / gRange) * h
-
-                        // Color based on the average of the two points
-                        let avgVal = (pt1.value + pt2.value) / 2
-                        let segColor: Color = avgVal < 70 ? Theme.low :
-                            avgVal <= 180 ? Theme.primary :
-                            avgVal <= 250 ? Theme.elevated : Theme.high
-
-                        Path { p in
-                            p.move(to: CGPoint(x: x1, y: y1))
-                            p.addLine(to: CGPoint(x: x2, y: y2))
-                        }
-                        .stroke(segColor, style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    }
-                }
+                // --- Glucose trend line ---
+                // Four accumulator paths (one per glucose band) stroked in
+                // separate colors. Per-segment bucketing means a single
+                // reading crossing 180 visually transitions from in-range
+                // blue to elevated orange on that segment. Four Path views
+                // total — not thousands — so SwiftUI renders reliably.
+                let trend = coloredTrendPaths(
+                    minTime: minTime, timeRange: timeRange,
+                    chartL: chartL, chartW: chartW, h: h,
+                    minVal: minVal, gRange: gRange,
+                    gapThreshold: glucoseGapThreshold
+                )
+                let stroke = StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
+                trend.inRange.stroke(Theme.primary, style: stroke)
+                trend.low.stroke(Theme.low, style: stroke)
+                trend.elevated.stroke(Theme.elevated, style: stroke)
+                trend.high.stroke(Theme.high, style: stroke)
 
                 // --- Scrubber ---
                 if let idx = selectedGlucoseIndex, idx < glucosePoints.count {
@@ -329,7 +367,7 @@ struct StackedChartView: View {
                 ForEach(0..<labelCount, id: \.self) { i in
                     let t = minTime + timeRange * Double(i) / Double(labelCount - 1)
                     let x = chartL + chartW * CGFloat(i) / CGFloat(labelCount - 1)
-                    Text(Date(timeIntervalSince1970: t), format: .dateTime.hour().minute())
+                    Text(ChartAxisFormat.label(for: Date(timeIntervalSince1970: t), range: range))
                         .font(.system(size: 7).monospacedDigit())
                         .foregroundStyle(Theme.textTertiary)
                         .position(x: x, y: 8)

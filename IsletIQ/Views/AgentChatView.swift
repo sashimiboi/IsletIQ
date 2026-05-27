@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import PhotosUI
 #if os(iOS)
 import Speech
@@ -39,8 +40,7 @@ let defaultTools: [AgentTool] = [
     AgentTool(id: "analyze_glucose_trends", name: "Analyze Glucose Trends", icon: "chart.line.uptrend.xyaxis", category: "CGM", description: "Analyze CGM data for TIR, variability, patterns", isEnabled: true),
     AgentTool(id: "analyze_meal_impact", name: "Meal Impact", icon: "fork.knife", category: "CGM", description: "Analyze how meals affect glucose", isEnabled: true),
     AgentTool(id: "generate_report", name: "Generate Report", icon: "doc.richtext.fill", category: "CGM", description: "Create endo visit reports", isEnabled: true),
-    // Pump
-    AgentTool(id: "calculate_bolus", name: "Bolus Calculator", icon: "function", category: "Pump", description: "Calculate insulin bolus from carbs and glucose", isEnabled: true),
+    // Devices
     AgentTool(id: "get_device_info", name: "Device Info", icon: "sensor.tag.radiowaves.forward.fill", category: "Devices", description: "Look up CGM/pump specs", isEnabled: true),
     AgentTool(id: "get_insulin_info", name: "Insulin Info", icon: "drop.fill", category: "Devices", description: "Insulin types with onset/peak/duration", isEnabled: true),
     AgentTool(id: "compare_devices", name: "Compare Devices", icon: "arrow.left.arrow.right", category: "Devices", description: "Compare two CGMs or pumps", isEnabled: true),
@@ -98,6 +98,34 @@ enum ThinkingType { case thinking, toolCall, toolResult }
 struct AgentChatView: View {
     var dexcomManager: DexcomManager?
     var healthKit: HealthKitManager?
+
+    /// Insulin history (bolus + basal) for agent context. Filtered to last
+    /// 14 days to keep the prompt compact.
+    @Query private var recentInsulin: [InsulinEntry]
+    /// Recent CGM readings (Glooko backfill + anything else stored) — used
+    /// when Dexcom live isn't available so the agent still has glucose data.
+    @Query private var recentGlucose: [GlucoseReading]
+
+    init(
+        dexcomManager: DexcomManager? = nil,
+        healthKit: HealthKitManager? = nil,
+        medicationClient: MedicationClient? = nil
+    ) {
+        self.dexcomManager = dexcomManager
+        self.healthKit = healthKit
+        self.medicationClient = medicationClient
+        let cutoff = Calendar.current.date(byAdding: .day, value: -14, to: .now)!
+        _recentInsulin = Query(
+            filter: #Predicate<InsulinEntry> { $0.timestamp >= cutoff },
+            sort: \.timestamp,
+            order: .reverse
+        )
+        _recentGlucose = Query(
+            filter: #Predicate<GlucoseReading> { $0.timestamp >= cutoff },
+            sort: \.timestamp,
+            order: .reverse
+        )
+    }
     var medicationClient: MedicationClient?
 
     @State private var selectedAgent = agents[0]
@@ -226,8 +254,10 @@ struct AgentChatView: View {
         }
         .task { await fetchSessions() }
         .onAppear {
-            // Per-session medical disclaimer gate (App Store guideline 1.4.1)
-            if !disclaimerManager.acknowledgedThisSession {
+            // Per-session medical disclaimer gate (App Store guideline 1.4.1).
+            // Only T1D users get bolus-context AI responses, so non-T1D users
+            // are not shown the bolus disclaimer.
+            if AuthManager.currentCohort == .t1d, !disclaimerManager.acknowledgedThisSession {
                 showBolusDisclaimer = true
             }
             Task {
@@ -247,11 +277,13 @@ struct AgentChatView: View {
                 }
             }
         }
+        #if os(iOS)
         .sheet(isPresented: $showBolusDisclaimer) {
             BolusDisclaimerSheet {
                 disclaimerManager.acknowledge()
             }
         }
+        #endif
     }
 
     private func updateToolsForAgent(_ agent: AgentDef) {
@@ -259,8 +291,8 @@ struct AgentChatView: View {
         let agentTools: [String: Set<String>] = [
             "islet1": Set(defaultTools.map(\.id)), // orchestrator has all
             "cgm": ["analyze_glucose_trends", "analyze_meal_impact", "generate_report", "search_literature", "get_diagnostics_tests"],
-            "pump": ["calculate_bolus", "get_device_info", "get_insulin_info", "analyze_meal_impact", "generate_report"],
-            "nutrition": ["estimate_meal", "lookup_food", "log_meal_request", "analyze_meal_impact", "calculate_bolus"],
+            "pump": ["get_device_info", "get_insulin_info", "analyze_meal_impact", "generate_report"],
+            "nutrition": ["estimate_meal", "lookup_food", "log_meal_request", "analyze_meal_impact"],
             "supply": ["add_supply", "update_supply_quantity", "use_supply", "get_supply_status", "generate_report"],
             "medication": ["add_medication", "log_medication_dose", "get_medication_schedule", "update_medication", "generate_report"],
         ]
@@ -435,7 +467,10 @@ struct AgentChatView: View {
     private var agentSelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(agents) { agent in
+                ForEach(agents.filter { agent in
+                    // Pump agent is T1D-only; everyone else sees the rest.
+                    AuthManager.currentCohort == .t1d || agent.id != "pump"
+                }) { agent in
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             selectedAgent = agent
@@ -813,8 +848,56 @@ struct AgentChatView: View {
             ctx.append("Today's medications:\n" + medLines.joined(separator: "\n"))
         }
 
-        // Pump / Insulin data — Omnipod doesn't write to HealthKit, agent gets this from Glooko data via tools
-        // (The orchestrator agent has access to bolus_data and insulin_daily tables directly)
+        // Pump / Insulin data — backfilled from Glooko into SwiftData as
+        // InsulinEntry. Summarize last 14 days so the agent can reason about
+        // dosing patterns, basal programs, bolus timing, etc.
+        let boluses = recentInsulin.filter { $0.kindRaw == "bolus" }
+        let basals = recentInsulin.filter { $0.kindRaw == "basal" }
+
+        if !boluses.isEmpty {
+            let recent = boluses.prefix(10)
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d h:mm a"
+            let lines = recent.map { b -> String in
+                var s = "\(fmt.string(from: b.timestamp)): \(String(format: "%.2f", b.units))U"
+                if b.carbs > 0 { s += " with \(Int(b.carbs))g carbs" }
+                return s
+            }
+            let totalToday = boluses
+                .filter { Calendar.current.isDateInToday($0.timestamp) }
+                .map(\.units).reduce(0, +)
+            ctx.append("Recent boluses (last \(recent.count) of \(boluses.count) in 14d):\n"
+                       + lines.joined(separator: "\n")
+                       + "\nTotal bolus insulin today: \(String(format: "%.2f", totalToday))U")
+        }
+
+        if !basals.isEmpty {
+            let rates = basals.map(\.units)
+            let avg = rates.reduce(0, +) / Double(rates.count)
+            let minR = rates.min() ?? 0
+            let maxR = rates.max() ?? 0
+            // Most-recent segment tells the agent the current scheduled rate.
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d h:mm a"
+            let current = basals.first
+                .map { "Current basal: \(String(format: "%.2f", $0.units))U/hr since \(fmt.string(from: $0.timestamp))" }
+                ?? ""
+            ctx.append("Basal (14d): \(basals.count) segments, avg \(String(format: "%.2f", avg))U/hr, range \(String(format: "%.2f", minR))-\(String(format: "%.2f", maxR))U/hr. \(current)")
+        }
+
+        // Backfilled CGM summary if live Dexcom wasn't in play above.
+        if (dexcomManager?.liveReadings.isEmpty ?? true), !recentGlucose.isEmpty {
+            let values = recentGlucose.map(\.value)
+            let avg = values.reduce(0, +) / max(1, values.count)
+            let inRange = values.filter { $0 >= 70 && $0 <= 180 }.count
+            let tir = Int(Double(inRange) / Double(max(1, values.count)) * 100)
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d h:mm a"
+            if let latest = recentGlucose.first {
+                ctx.append("Latest CGM: \(latest.value) mg/dL at \(fmt.string(from: latest.timestamp))")
+            }
+            ctx.append("Backfilled CGM (14d): \(values.count) readings, avg \(avg) mg/dL, TIR \(tir)%")
+        }
 
         return ctx.joined(separator: "\n\n")
     }
@@ -947,7 +1030,7 @@ struct AgentChatView: View {
                 isTyping = false
                 messages.append(ChatMessage(
                     role: .assistant,
-                    content: "Connection error: \(error.localizedDescription)\n\nMake sure islet-aiservice is running on localhost:8000.",
+                    content: "Connection error: \(error.localizedDescription)\n\nCheck your network and try again. If the problem persists, contact feedback@isletiq.com.",
                     agent: selectedAgent.name,
                     timestamp: .now
                 ))

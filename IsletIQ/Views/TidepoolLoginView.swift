@@ -86,7 +86,9 @@ struct TidepoolLoginView: View {
                 Spacer()
             }
             .background(Theme.bg)
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

@@ -15,7 +15,23 @@ struct MedicationListView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                MedicationAdherenceChart(history: history, days: $historyDays, errorMessage: historyError)
+                MedicationAdherenceChart(
+                    history: history,
+                    days: $historyDays,
+                    errorMessage: historyError,
+                    onLogDose: { medId, date in
+                        Task {
+                            _ = await medClient.logDose(medicationId: medId, scheduledTime: nil, date: date)
+                            await loadHistory()
+                        }
+                    },
+                    onUnlogDose: { medId, date in
+                        Task {
+                            _ = await medClient.unlogDose(medicationId: medId, scheduledTime: nil, date: date)
+                            await loadHistory()
+                        }
+                    }
+                )
                     .onChange(of: historyDays) { _, _ in
                         Task { await loadHistory() }
                     }
@@ -173,6 +189,8 @@ struct MedicationAdherenceChart: View {
     let history: [MedicationHistoryDay]
     @Binding var days: Int
     var errorMessage: String? = nil
+    var onLogDose: ((Int, Date) -> Void)? = nil
+    var onUnlogDose: ((Int, Date) -> Void)? = nil
     @State private var mode: AdherenceChartMode = .percent
     @State private var selectedDate: Date? = nil
 
@@ -217,7 +235,9 @@ struct MedicationAdherenceChart: View {
     }
 
     private var maxCount: Int {
-        history.map { dayExpectedCount($0) }.max() ?? 1
+        let maxExpected = history.map { dayExpectedCount($0) }.max() ?? 1
+        let maxStackedTaken = history.map { dayTakenCount($0) }.max() ?? 0
+        return max(maxExpected, maxStackedTaken, 1)
     }
 
     private func sameDay(_ a: Date, _ b: Date) -> Bool {
@@ -284,7 +304,14 @@ struct MedicationAdherenceChart: View {
                             let value: Double = {
                                 switch mode {
                                 case .percent:
-                                    return expectedTotal > 0 ? Double(entry.taken) / Double(expectedTotal) * 100 : 0
+                                    // Clamp per-med contribution at 100 so a
+                                    // user over-logging (e.g. 3 taken of 1
+                                    // expected) doesn't shoot the stacked bar
+                                    // past the plot area.
+                                    let raw = expectedTotal > 0
+                                        ? Double(entry.taken) / Double(expectedTotal) * 100
+                                        : 0
+                                    return min(100.0, raw)
                                 case .count:
                                     return Double(entry.taken)
                                 }
@@ -320,6 +347,9 @@ struct MedicationAdherenceChart: View {
                     }
                 }
                 .chartLegend(position: .bottom, alignment: .leading, spacing: 6)
+                .chartPlotStyle { plotArea in
+                    plotArea.clipped()
+                }
                 .chartYScale(domain: 0.0...(mode == .percent ? 110.0 : Double(max(1, maxCount))))
                 .chartXAxis {
                     AxisMarks(values: .stride(by: .day, count: max(1, days / 7))) { _ in
@@ -413,19 +443,50 @@ struct MedicationAdherenceChart: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        let dayDate = parse(day.date)
+                        let isFuture = dayDate > Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400 - 1)
+                        let canTap = !isFuture && onLogDose != nil
                         ForEach(day.entries, id: \.medicationId) { entry in
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(entry.taken >= entry.expected ? Color.green : entry.taken > 0 ? .orange : Theme.textTertiary)
-                                    .frame(width: 6, height: 6)
-                                Text(entry.name)
-                                    .font(.caption2)
-                                    .foregroundStyle(Theme.textSecondary)
-                                Spacer()
-                                Text("\(entry.taken)/\(entry.expected)")
-                                    .font(.caption2.monospacedDigit())
-                                    .foregroundStyle(Theme.textTertiary)
+                            Button {
+                                if canTap { onLogDose?(entry.medicationId, dayDate) }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(entry.taken >= entry.expected ? Color.green : entry.taken > 0 ? .orange : Theme.textTertiary)
+                                        .frame(width: 6, height: 6)
+                                    Text(entry.name)
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.textSecondary)
+                                    Spacer()
+                                    Text("\(entry.taken)/\(entry.expected)")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(canTap ? Theme.primary : Theme.textTertiary)
+                                    if canTap {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(Theme.primary)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                                .padding(.vertical, 2)
                             }
+                            .buttonStyle(.plain)
+                            .disabled(!canTap)
+                            .contextMenu {
+                                if canTap, entry.taken > 0 {
+                                    Button(role: .destructive) {
+                                        onUnlogDose?(entry.medicationId, dayDate)
+                                    } label: {
+                                        Label("Undo last dose", systemImage: "arrow.uturn.backward")
+                                    }
+                                }
+                            }
+                        }
+                        if canTap {
+                            Text("Tap a row to log a missed dose for this day · long-press to undo")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Theme.textTertiary)
+                                .padding(.top, 2)
                         }
                     }
                     .padding(10)

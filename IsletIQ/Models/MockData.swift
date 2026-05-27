@@ -90,7 +90,7 @@ struct MockData {
         let boluses = bolusData()
         let threeHoursAgo = Date().addingTimeInterval(-3 * 3600)
         let recent = boluses.filter { $0.timestamp >= threeHoursAgo }
-        return recent.isEmpty ? 0 : recent.reduce(0) { $0 + $1.carbs } / 2
+        return recent.isEmpty ? 0 : Int(recent.reduce(0.0) { $0 + $1.carbs } / 2)
     }
 
     static var lastBolus: Double {

@@ -9,6 +9,10 @@ final class GlucoseReading {
     var mealTag: MealTag
     var trendArrowRaw: String = TrendArrow.flat.rawValue
     var sourceRaw: String = ReadingSource.cgm.rawValue
+    /// Origin of the row. Empty for native entries (manual, Dexcom Share,
+    /// HealthKit, seeded mock data). Set to "glooko" for Glooko-imported rows
+    /// so a Glooko-specific wipe leaves everything else alone.
+    var importOrigin: String = ""
 
     var trendArrow: TrendArrow {
         get { TrendArrow(rawValue: trendArrowRaw) ?? .flat }
@@ -26,7 +30,8 @@ final class GlucoseReading {
         note: String = "",
         mealTag: MealTag = .none,
         trendArrow: TrendArrow = .flat,
-        source: ReadingSource = .cgm
+        source: ReadingSource = .cgm,
+        importOrigin: String = ""
     ) {
         self.value = value
         self.timestamp = timestamp
@@ -34,6 +39,7 @@ final class GlucoseReading {
         self.mealTag = mealTag
         self.trendArrowRaw = trendArrow.rawValue
         self.sourceRaw = source.rawValue
+        self.importOrigin = importOrigin
     }
 
     var status: GlucoseStatus {

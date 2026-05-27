@@ -144,4 +144,27 @@ final class DexcomManager {
     var latestTrend: TrendArrow {
         liveReadings.first?.trendArrow ?? .flat
     }
+
+    /// Timestamp of the most recent live reading, if any.
+    var latestReadingTimestamp: Date? {
+        liveReadings.first?.timestamp
+    }
+
+    /// Returns true when the newest reading is older than 15 minutes.
+    /// Insights derived from stale CGM data should be flagged to the user.
+    var isStale: Bool {
+        guard let ts = latestReadingTimestamp else { return true }
+        return Date().timeIntervalSince(ts) > 15 * 60
+    }
+
+    /// Human-readable age string ("3 min ago", "1 hr ago"). Empty if no reading.
+    var readingAgeDescription: String {
+        guard let ts = latestReadingTimestamp else { return "no reading" }
+        let seconds = Int(Date().timeIntervalSince(ts))
+        if seconds < 60 { return "just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) min ago" }
+        let hours = minutes / 60
+        return "\(hours) hr ago"
+    }
 }

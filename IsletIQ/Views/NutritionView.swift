@@ -12,7 +12,16 @@ struct NutritionView: View {
     @State private var showAddMed = false
     @State private var showMedList = false
     @State private var selectedDate: Date = .now
+    @State private var sleepMode: SleepMode = .single
+    @State private var sleepRange: ChartRange = .fourteenDays
+    @State private var sleepHistory: [SleepData] = []
+    @State private var sleepHistoryLoading = false
     private let medClient = MedicationClient()
+
+    enum SleepMode: String, CaseIterable {
+        case single = "Night"
+        case bar = "Bar"
+    }
 
     enum HealthMetric: String, Identifiable {
         case steps, calories, heartRate, hrv, vo2Max, bloodPressure, bodyTemp, bloodOxygen
@@ -39,14 +48,14 @@ struct NutritionView: View {
                 // Health metrics grid (steps, HR, HRV, VO₂, BP, temp, SpO₂)
                 activityCard
 
-                // Quick log before the reference
+                // Recent meals first so users see what they have already logged
+                recentMealsCard
+
+                // Quick log
                 quickLogCard
 
                 // Carb reference
                 carbReferenceCard
-
-                // Recent meals at the bottom
-                recentMealsCard
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -109,7 +118,43 @@ struct NutritionView: View {
                 }
             }
 
-            if let sleep = healthKit?.lastSleep {
+            // Single-night vs bar-history toggle
+            HStack(spacing: 6) {
+                ForEach(SleepMode.allCases, id: \.self) { mode in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { sleepMode = mode }
+                        if mode == .bar { Task { await loadSleepHistory() } }
+                    } label: {
+                        Text(mode.rawValue)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(sleepMode == mode ? .white : Theme.textSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(
+                                sleepMode == mode ? Theme.primary : Theme.muted,
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if sleepMode == .bar {
+                    Divider().frame(height: 16)
+                    ChartRangePicker(selection: $sleepRange)
+                        .onChange(of: sleepRange) {
+                            Task { await loadSleepHistory() }
+                        }
+                }
+                Spacer()
+            }
+
+            if sleepMode == .bar {
+                if sleepHistoryLoading {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 200)
+                } else {
+                    SleepBarChartView(nights: sleepHistory, range: sleepRange)
+                }
+            } else if let sleep = healthKit?.lastSleep {
                 HStack(spacing: 0) {
                     SleepStat(value: String(format: "%.1f", sleep.totalHours), unit: "hrs", label: "Total", color: Theme.primary)
                     Spacer()
@@ -700,6 +745,22 @@ struct NutritionView: View {
         let result = await medClient.fetchHistory(days: medHistoryDays)
         medHistory = result.days
         medHistoryError = result.errorMessage
+    }
+
+    private func loadSleepHistory() async {
+        guard let mgr = healthKit else { return }
+        let days: Int = {
+            switch sleepRange {
+            case .day: 1
+            case .threeDays: 3
+            case .fourteenDays: 14
+            case .thirtyDays: 30
+            }
+        }()
+        sleepHistoryLoading = true
+        let nights = await mgr.fetchSleepHistory(days: days)
+        sleepHistory = nights
+        sleepHistoryLoading = false
     }
 
     private var carbReferenceCard: some View {

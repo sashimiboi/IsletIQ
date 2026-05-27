@@ -20,6 +20,7 @@ let marketplaceApps: [AppIntegration] = [
     AppIntegration(id: "tslim", name: "t:connect", icon: "cross.vial.fill", category: "Pump", description: "Tandem t:slim X2 pump data sync", developer: "Tandem Diabetes", isConnected: true, isPopular: true),
     AppIntegration(id: "omnipod", name: "Omnipod 5", icon: "circle.hexagongrid.fill", category: "Pump", description: "Omnipod tubeless pump integration", developer: "Insulet Corp.", isConnected: false),
     AppIntegration(id: "medtronic", name: "CareLink", icon: "link.circle.fill", category: "Pump", description: "Medtronic pump & CGM data", developer: "Medtronic", isConnected: false),
+    AppIntegration(id: "twiist", name: "Twiist", icon: "circle.circle.fill", category: "Pump", description: "Sequel Med Tech Twiist AID pump data via Tidepool", developer: "Sequel Med Tech", isConnected: false),
 
     // Health & Fitness
     AppIntegration(id: "healthkit", name: "Apple Health", icon: "heart.fill", category: "Health", description: "Sync glucose, insulin, and activity data", developer: "Apple", isConnected: true, isPopular: true),

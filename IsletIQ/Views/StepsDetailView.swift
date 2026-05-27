@@ -65,7 +65,9 @@ struct StepsDetailView: View {
             }
             .background(Theme.bg)
             .navigationTitle("Steps")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }

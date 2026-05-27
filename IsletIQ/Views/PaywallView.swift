@@ -105,7 +105,9 @@ struct PaywallView: View {
                 .padding(.bottom, 20)
             }
             .background(Theme.bg)
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Later") { dismiss() }
