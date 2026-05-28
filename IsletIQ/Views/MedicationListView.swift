@@ -117,6 +117,7 @@ struct MedicationCard: View {
     var onEdit: () -> Void
     var onDelete: () -> Void
     var onToggle: () -> Void
+    @State private var showingDoseLog = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -130,6 +131,7 @@ struct MedicationCard: View {
                 Spacer()
                 Menu {
                     Button { onEdit() } label: { Label("Edit", systemImage: "pencil") }
+                    Button { showingDoseLog = true } label: { Label("Dose Log", systemImage: "list.bullet.clipboard") }
                     Button { onToggle() } label: {
                         Label(medication.isActive ? "Disable" : "Enable",
                               systemImage: medication.isActive ? "pause.circle" : "play.circle")
@@ -139,6 +141,9 @@ struct MedicationCard: View {
                     Image(systemName: "ellipsis")
                         .foregroundStyle(Theme.textTertiary)
                         .padding(6)
+                }
+                .sheet(isPresented: $showingDoseLog) {
+                    DoseLogSheet(medication: medication)
                 }
             }
 
@@ -477,43 +482,44 @@ struct MedicationAdherenceChart: View {
                         let isFuture = dayDate > Calendar.current.startOfDay(for: Date()).addingTimeInterval(86400 - 1)
                         let canTap = !isFuture && onLogDose != nil
                         ForEach(day.entries, id: \.medicationId) { entry in
-                            Button {
-                                if canTap { onLogDose?(entry.medicationId, dayDate) }
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(entry.taken >= entry.expected ? Color.green : entry.taken > 0 ? .orange : Theme.textTertiary)
-                                        .frame(width: 6, height: 6)
-                                    Text(entry.name)
-                                        .font(.caption2)
-                                        .foregroundStyle(Theme.textSecondary)
-                                    Spacer()
-                                    Text("\(entry.taken)/\(entry.expected)")
-                                        .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(canTap ? Theme.primary : Theme.textTertiary)
-                                    if canTap {
-                                        Image(systemName: "plus.circle.fill")
-                                            .font(.caption2)
-                                            .foregroundStyle(Theme.primary)
-                                    }
-                                }
-                                .contentShape(Rectangle())
-                                .padding(.vertical, 2)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(!canTap)
-                            .contextMenu {
-                                if canTap, entry.taken > 0 {
-                                    Button(role: .destructive) {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(entry.taken >= entry.expected ? Color.green : entry.taken > 0 ? .orange : Theme.textTertiary)
+                                    .frame(width: 6, height: 6)
+                                Text(entry.name)
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.textSecondary)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(entry.taken)/\(entry.expected)")
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundStyle(entry.taken > entry.expected ? Theme.high : Theme.primary)
+                                if canTap {
+                                    // Decrement button — visible, no long-press needed
+                                    Button {
                                         onUnlogDose?(entry.medicationId, dayDate)
                                     } label: {
-                                        Label("Undo last dose", systemImage: "arrow.uturn.backward")
+                                        Image(systemName: "minus.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(entry.taken > 0 ? Theme.high : Theme.textTertiary)
                                     }
+                                    .buttonStyle(.plain)
+                                    .disabled(entry.taken == 0)
+
+                                    Button {
+                                        onLogDose?(entry.medicationId, dayDate)
+                                    } label: {
+                                        Image(systemName: "plus.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(Theme.primary)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
+                            .padding(.vertical, 2)
                         }
                         if canTap {
-                            Text("Tap a row to log a missed dose for this day · long-press to undo")
+                            Text("Use + / − to correct dose counts for this day")
                                 .font(.system(size: 10))
                                 .foregroundStyle(Theme.textTertiary)
                                 .padding(.top, 2)
@@ -526,6 +532,120 @@ struct MedicationAdherenceChart: View {
         }
         .padding(16)
         .card()
+    }
+}
+
+// MARK: - Dose Log Sheet
+
+private struct DoseLogSheet: View {
+    let medication: Medication
+    @Environment(\.dismiss) private var dismiss
+    @State private var doses: [DoseRecord] = []
+    @State private var isLoading = true
+    @State private var deleteError: String?
+    private let client = MedicationClient()
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if isLoading {
+                    ProgressView("Loading dose log...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if doses.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "list.bullet.clipboard")
+                            .font(.system(size: 36))
+                            .foregroundStyle(Theme.textTertiary)
+                        Text("No doses logged in the last 14 days")
+                            .font(.subheadline)
+                            .foregroundStyle(Theme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        if let err = deleteError {
+                            Text(err)
+                                .font(.caption)
+                                .foregroundStyle(Theme.high)
+                                .listRowBackground(Color.clear)
+                        }
+                        ForEach(doses) { dose in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(dose.displayTime)
+                                        .font(.subheadline)
+                                        .foregroundStyle(Theme.textPrimary)
+                                    if let slot = dose.scheduledTime, !slot.isEmpty {
+                                        Text("Scheduled: \(slot)")
+                                            .font(.caption2)
+                                            .foregroundStyle(Theme.textTertiary)
+                                    }
+                                }
+                                Spacer()
+                                statusBadge(dose.status ?? "taken")
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    Task { await delete(dose) }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                        Section {
+                            Text("Swipe left on any entry to delete it. This adjusts your adherence count immediately.")
+                                .font(.caption)
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                        .listRowBackground(Color.clear)
+                    }
+                    .listStyle(.insetGrouped)
+                }
+            }
+            .background(Theme.bg)
+            .navigationTitle("Dose Log — \(medication.name)")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }.foregroundStyle(Theme.primary)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Image(systemName: "arrow.clockwise").foregroundStyle(Theme.primary)
+                    }
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private func statusBadge(_ status: String) -> some View {
+        let color: Color = status == "taken" ? Theme.normal : Theme.textTertiary
+        return Text(status.capitalized)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
+    private func load() async {
+        isLoading = true
+        doses = await client.fetchDoseLog(medicationId: medication.id, days: 14)
+        isLoading = false
+    }
+
+    private func delete(_ dose: DoseRecord) async {
+        let ok = await client.deleteDoseById(dose.id)
+        if ok {
+            await MainActor.run { doses.removeAll { $0.id == dose.id } }
+        } else {
+            await MainActor.run { deleteError = "Couldn't delete that record." }
+        }
     }
 }
 

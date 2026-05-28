@@ -220,3 +220,34 @@ struct TodayDose: Codable {
         case takenAt = "taken_at"
     }
 }
+
+struct DoseRecord: Identifiable, Codable {
+    let id: Int
+    let scheduledTime: String?
+    let status: String?
+    let takenAt: String?
+    let notes: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, notes, status
+        case scheduledTime = "scheduled_time"
+        case takenAt = "taken_at"
+    }
+
+    var takenDate: Date? {
+        guard let s = takenAt else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: s) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: s)
+    }
+
+    var displayTime: String {
+        guard let d = takenDate else { return takenAt ?? "—" }
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: d)
+    }
+}

@@ -130,6 +130,33 @@ actor MedicationClient {
         } catch { return false }
     }
 
+    func fetchDoseLog(medicationId: Int, date: Date? = nil, days: Int = 14) async -> [DoseRecord] {
+        var components = URLComponents(string: "\(baseURL)/api/medications/\(medicationId)/doses")
+        var items: [URLQueryItem] = []
+        if let date { items.append(URLQueryItem(name: "date", value: Self.isoDateString(date))) }
+        else { items.append(URLQueryItem(name: "days", value: "\(days)")) }
+        components?.queryItems = items
+        guard let url = components?.url else { return [] }
+        var request = URLRequest(url: url)
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            struct Wrapper: Codable { let doses: [DoseRecord] }
+            return (try JSONDecoder().decode(Wrapper.self, from: data)).doses
+        } catch { return [] }
+    }
+
+    func deleteDoseById(_ doseId: Int) async -> Bool {
+        guard let url = URL(string: "\(baseURL)/api/medications/doses/\(doseId)") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        APIConfig.applyAuth(to: &request)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return ((response as? HTTPURLResponse)?.statusCode ?? 0) / 100 == 2
+        } catch { return false }
+    }
+
     func deleteMedication(id: Int) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications/\(id)") else { return false }
         var request = URLRequest(url: url)
