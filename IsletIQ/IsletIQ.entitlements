@@ -4,5 +4,9 @@
 <dict>
 	<key>com.apple.developer.healthkit</key>
 	<true/>
+	<!-- App Sandbox is on; macOS builds need this to talk to the
+	     localhost dev backend (and to api.isletiq.com in release). -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 </dict>
 </plist>

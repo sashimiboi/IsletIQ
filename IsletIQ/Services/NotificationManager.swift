@@ -101,20 +101,30 @@ class NotificationManager {
         guard isAuthorized else { return }
 
         for supply in supplies {
-            if supply.quantity <= 3 && supply.quantity > 0 {
-                sendImmediate(
-                    id: "supply-low-\(supply.id)",
-                    title: "Low Supply - \(supply.name)",
-                    body: "Only \(supply.quantity) left (\(supply.daysRemaining) days). Time to reorder.",
-                    category: "supply"
-                )
-            } else if supply.quantity == 0 {
+            if supply.quantity == 0 {
                 sendImmediate(
                     id: "supply-out-\(supply.id)",
                     title: "Out of \(supply.name)",
                     body: "You have 0 left. Reorder immediately.",
                     category: "supply",
                     sound: .defaultCritical
+                )
+            } else if supply.daysRemaining <= supply.alertDaysBefore {
+                // Burn-rate-based alert: fires when projected stockout is
+                // inside the user's alert_days_before window, not just on a
+                // hardcoded quantity threshold.
+                let dateStr: String = {
+                    guard let date = supply.projectedStockoutDate else { return "" }
+                    return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .none)
+                }()
+                let body = dateStr.isEmpty
+                    ? "\(supply.quantity) left, ~\(supply.daysRemaining)d of supply. Time to reorder."
+                    : "\(supply.quantity) left, ~\(supply.daysRemaining)d of supply. Projected stockout: \(dateStr)."
+                sendImmediate(
+                    id: "supply-low-\(supply.id)",
+                    title: "Low Supply - \(supply.name)",
+                    body: body,
+                    category: "supply"
                 )
             }
         }

@@ -50,18 +50,6 @@ struct ContentView: View {
         } else if currentRole.isProvider {
             ProviderHomeView()
         } else {
-        #if os(macOS)
-        NavigationSplitView {
-            sidebarContent
-        } detail: {
-            DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
-        }
-        .frame(minWidth: 700, minHeight: 500)
-        .onAppear(perform: seedIfNeeded)
-        .sheet(isPresented: $showingLogEntry) {
-            LogEntryView()
-        }
-        #else
         TabView {
             NavigationStack {
                 DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
@@ -74,7 +62,7 @@ struct ContentView: View {
                                 Button { showingMealLog = true } label: {
                                     Label("Log Meal", systemImage: "fork.knife")
                                 }
-                                if AuthManager.currentCohort == .t1d {
+                                if AuthManager.currentCohort.supportsInsulinLogging {
                                     Button { showingLogInsulin = true } label: {
                                         Label("Log Insulin", systemImage: "syringe")
                                     }
@@ -207,6 +195,12 @@ struct ContentView: View {
         .sheet(isPresented: $showingLogInsulin) {
             LogInsulinView(healthKit: healthKit)
         }
+        #if os(macOS)
+        // On macOS, render the iOS tabs as an adaptive sidebar so the
+        // window feels native without re-skinning every tab. iOS keeps
+        // the bottom bar.
+        .tabViewStyle(.sidebarAdaptable)
+        .frame(minWidth: 800, minHeight: 560)
         #endif
         } // end isAuthenticated
     }
@@ -381,71 +375,6 @@ struct ContentView: View {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         _ = try? await URLSession.shared.data(for: request)
     }
-
-    #if os(macOS)
-    private var sidebarContent: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image("IsletLogo")
-                    .resizable()
-                    .frame(width: 32, height: 32)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                Text("IsletIQ")
-                    .font(.headline)
-                    .foregroundStyle(Theme.textPrimary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-
-            Divider()
-
-            List {
-                NavigationLink {
-                    DashboardView(dexcomManager: dexcomManager, healthKit: healthKit)
-                } label: {
-                    Label("CGM", systemImage: "chart.line.uptrend.xyaxis")
-                }
-                if AuthManager.currentCohort == .t1d {
-                    NavigationLink {
-                        PumpView(healthKit: healthKit)
-                    } label: {
-                        Label("Pump", systemImage: "cross.vial.fill")
-                    }
-                }
-                NavigationLink {
-                    AgentChatView(dexcomManager: dexcomManager, healthKit: healthKit, medicationClient: medicationClient)
-                } label: {
-                    Label("Agent", systemImage: "brain.head.profile.fill")
-                }
-                NavigationLink {
-                    MarketplaceView()
-                } label: {
-                    Label("Apps", systemImage: "square.grid.2x2.fill")
-                }
-                NavigationLink {
-                    HistoryView()
-                } label: {
-                    Label("History", systemImage: "clock.arrow.circlepath")
-                }
-                NavigationLink {
-                    SettingsView(dexcomManager: dexcomManager)
-                } label: {
-                    Label("Settings", systemImage: "gearshape.fill")
-                }
-            }
-            .listStyle(.sidebar)
-        }
-        .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-        .toolbar {
-            ToolbarItem {
-                Button { showingLogEntry = true } label: {
-                    Label("Log Reading", systemImage: "plus")
-                }
-            }
-        }
-    }
-    #endif
 
     private func seedIfNeeded() {
         // Mock data seeding is disabled in production. New users see an empty

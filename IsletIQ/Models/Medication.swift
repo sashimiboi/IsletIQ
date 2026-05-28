@@ -12,6 +12,11 @@ struct Medication: Identifiable, Codable {
     var intervalDays: Int = 1
     var dueWeekday: Int? = nil
     var dueDayOfMonth: Int? = nil
+    var quantity: Int = 0
+    var usageRateDays: Double = 1.0
+    var alertDaysBefore: Int = 14
+    var daysRemaining: Int = 0
+    var isLow: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, dosage, category, frequency, notes
@@ -20,6 +25,11 @@ struct Medication: Identifiable, Codable {
         case intervalDays = "interval_days"
         case dueWeekday = "due_weekday"
         case dueDayOfMonth = "due_day_of_month"
+        case quantity
+        case usageRateDays = "usage_rate_days"
+        case alertDaysBefore = "alert_days_before"
+        case daysRemaining = "days_remaining"
+        case isLow = "is_low"
     }
 
     var categoryIcon: String {

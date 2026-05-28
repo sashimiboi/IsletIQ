@@ -41,17 +41,24 @@ enum Theme {
     }
 }
 
-// MARK: - Card
+// MARK: - Card — Liquid Glass on macOS 26 / iOS 26, frosted material elsewhere
 
 struct CardStyle: ViewModifier {
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content
-            .background(
-                RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                    .fill(Theme.cardBg)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
-            .shadow(color: .black.opacity(0.04), radius: 6, y: 2)
+        let shape = RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            content
+                .glassEffect(.regular, in: shape)
+                .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+        } else {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(
+                    shape.stroke(Color.white.opacity(0.4), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.05), radius: 8, y: 3)
+        }
     }
 }
 

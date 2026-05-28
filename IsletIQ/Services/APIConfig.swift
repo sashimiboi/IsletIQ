@@ -21,8 +21,15 @@ enum APIConfig {
     }
 
     nonisolated static var baseURL: String {
+        // 127.0.0.1 instead of localhost: uvicorn binds IPv4 only by
+        // default, and Mac URLSession's Happy Eyeballs tries ::1 first,
+        // which refuses and stalls. Forcing IPv4 sidesteps the race.
         #if targetEnvironment(simulator)
-        return "http://localhost:8000"
+        return "http://127.0.0.1:8000"
+        #elseif os(macOS) && DEBUG
+        // Native Mac dev runs alongside the local backend on the same
+        // machine. Release Mac builds still hit cloudURL.
+        return "http://127.0.0.1:8000"
         #else
         return useLocalBackendOnDevice ? "http://\(macIP):8000" : cloudURL
         #endif

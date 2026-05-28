@@ -10,13 +10,30 @@ struct RemoteSupply: Identifiable {
     let alertDaysBefore: Int
     let notes: String
 
+    /// Projected days of supply remaining. Each unit lasts `usageRateDays`
+    /// days; multiply by quantity to get total days of cover.
     var daysRemaining: Int { Int(Double(quantity) * usageRateDays) }
-    var needsAlert: Bool { quantity <= 3 }
+
+    /// Calendar date this supply is projected to run out, given the
+    /// configured burn rate. Nil when the user has zero on hand.
+    var projectedStockoutDate: Date? {
+        guard quantity > 0 else { return nil }
+        return Calendar.current.date(byAdding: .day, value: daysRemaining, to: .now)
+    }
+
+    /// Fires alerts when the projection is inside the user-configured
+    /// `alert_days_before` window (or when supply is out). Replaces the
+    /// previous quantity-only threshold so a pod-box (5 pods x 3d = 15d)
+    /// alerts later than a single-vial item with the same quantity.
+    var needsAlert: Bool {
+        if quantity == 0 { return true }
+        return daysRemaining <= alertDaysBefore
+    }
 
     var urgency: SupplyUrgency {
         if quantity == 0 { return .out }
-        if quantity <= 1 { return .critical }
-        if quantity <= 3 { return .low }
+        if daysRemaining <= max(1, alertDaysBefore / 3) { return .critical }
+        if daysRemaining <= alertDaysBefore { return .low }
         return .good
     }
 
@@ -293,6 +310,11 @@ struct RemoteSupplyRow: View {
                                 Text("·").foregroundStyle(Theme.textTertiary)
                                 Text("\(supply.daysRemaining)d supply")
                                     .font(.caption).foregroundStyle(Theme.textSecondary)
+                                if let date = supply.projectedStockoutDate {
+                                    Text("·").foregroundStyle(Theme.textTertiary)
+                                    Text("runs out \(date, format: .dateTime.month(.abbreviated).day())")
+                                        .font(.caption).foregroundStyle(Theme.textTertiary)
+                                }
                             }
                         }
                         if supply.urgency == .critical || supply.urgency == .out {

@@ -165,10 +165,40 @@ struct MedicationCard: View {
                     }
                 }
             }
+
+            if medication.quantity > 0 || medication.isLow {
+                stockRow
+            }
         }
         .padding(16)
         .opacity(medication.isActive ? 1 : 0.5)
         .card()
+    }
+
+    private var stockRow: some View {
+        let color: Color = medication.isLow ? Theme.high : Theme.textSecondary
+        return HStack(spacing: 6) {
+            Image(systemName: medication.isLow ? "exclamationmark.triangle.fill" : "shippingbox")
+                .font(.caption2)
+                .foregroundStyle(color)
+            if medication.quantity > 0 {
+                Text("\(medication.quantity) on hand")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(color)
+                if medication.daysRemaining > 0 {
+                    Text("- \(medication.daysRemaining)d supply")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(color)
+                }
+            } else {
+                Text("Out of stock")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(color)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }
 

@@ -13,6 +13,7 @@ struct AddMedicationView: View {
     @State private var notes = ""
     @State private var dueWeekday: Int = 1    // default Monday
     @State private var dueDayOfMonth: Int = 1
+    @State private var quantity: Int = 0
     @State private var saving = false
 
     private let medClient = MedicationClient()
@@ -166,6 +167,30 @@ struct AddMedicationView: View {
                     .padding(20)
                     .card()
 
+                    // Stock
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Stock on Hand")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                        HStack {
+                            Text("Doses available")
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.textSecondary)
+                            Spacer()
+                            Stepper("\(quantity)", value: $quantity, in: 0...9999)
+                                .labelsHidden()
+                            Text("\(quantity)")
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(Theme.textPrimary)
+                                .frame(minWidth: 32, alignment: .trailing)
+                        }
+                        Text("Stock decrements automatically when you log a dose.")
+                            .font(.caption2)
+                            .foregroundStyle(Theme.textTertiary)
+                    }
+                    .padding(20)
+                    .card()
+
                     // Notes
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Notes")
@@ -224,6 +249,7 @@ struct AddMedicationView: View {
                     }
                     if let wday = med.dueWeekday { dueWeekday = wday }
                     if let dom = med.dueDayOfMonth { dueDayOfMonth = dom }
+                    quantity = med.quantity
                 }
             }
         }
@@ -244,14 +270,16 @@ struct AddMedicationView: View {
                 category: category, frequency: frequency,
                 scheduleTimes: times, notes: notes,
                 intervalDays: selectedInterval,
-                dueWeekday: wday, dueDayOfMonth: dom
+                dueWeekday: wday, dueDayOfMonth: dom,
+                quantity: quantity
             )
         } else {
             _ = await medClient.createMedication(
                 name: name, dosage: dosage, category: category,
                 frequency: frequency, scheduleTimes: times, notes: notes,
                 intervalDays: selectedInterval,
-                dueWeekday: wday, dueDayOfMonth: dom
+                dueWeekday: wday, dueDayOfMonth: dom,
+                quantity: quantity
             )
         }
         await MainActor.run {

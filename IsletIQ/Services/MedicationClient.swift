@@ -85,7 +85,7 @@ actor MedicationClient {
         }
     }
 
-    func createMedication(name: String, dosage: String, category: String, frequency: String, scheduleTimes: [String], notes: String = "", intervalDays: Int = 1, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil) async -> Bool {
+    func createMedication(name: String, dosage: String, category: String, frequency: String, scheduleTimes: [String], notes: String = "", intervalDays: Int = 1, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil, quantity: Int = 0) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -94,7 +94,7 @@ actor MedicationClient {
         var body: [String: Any] = [
             "name": name, "dosage": dosage, "category": category,
             "frequency": frequency, "schedule_times": scheduleTimes, "notes": notes,
-            "interval_days": intervalDays,
+            "interval_days": intervalDays, "quantity": quantity,
         ]
         if let dueWeekday { body["due_weekday"] = dueWeekday }
         if let dueDayOfMonth { body["due_day_of_month"] = dueDayOfMonth }
@@ -105,7 +105,7 @@ actor MedicationClient {
         } catch { return false }
     }
 
-    func updateMedication(id: Int, name: String? = nil, dosage: String? = nil, category: String? = nil, frequency: String? = nil, scheduleTimes: [String]? = nil, notes: String? = nil, isActive: Bool? = nil, intervalDays: Int? = nil, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil) async -> Bool {
+    func updateMedication(id: Int, name: String? = nil, dosage: String? = nil, category: String? = nil, frequency: String? = nil, scheduleTimes: [String]? = nil, notes: String? = nil, isActive: Bool? = nil, intervalDays: Int? = nil, dueWeekday: Int? = nil, dueDayOfMonth: Int? = nil, quantity: Int? = nil) async -> Bool {
         guard let url = URL(string: "\(baseURL)/api/medications/\(id)") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "PUT"
@@ -122,6 +122,7 @@ actor MedicationClient {
         if let intervalDays { body["interval_days"] = intervalDays }
         if let dueWeekday { body["due_weekday"] = dueWeekday }
         if let dueDayOfMonth { body["due_day_of_month"] = dueDayOfMonth }
+        if let quantity { body["quantity"] = quantity }
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         do {
             let (_, response) = try await URLSession.shared.data(for: request)

@@ -25,6 +25,7 @@ enum Cohort: String, Codable, CaseIterable, Identifiable {
     case t1d
     case t2d
     case glp1
+    case gdm
 
     var id: String { rawValue }
 
@@ -33,6 +34,7 @@ enum Cohort: String, Codable, CaseIterable, Identifiable {
         case .t1d: return "Type 1 Diabetes"
         case .t2d: return "Type 2 Diabetes"
         case .glp1: return "GLP-1 / Weight Management"
+        case .gdm: return "Gestational Diabetes"
         }
     }
 
@@ -41,6 +43,7 @@ enum Cohort: String, Codable, CaseIterable, Identifiable {
         case .t1d: return "T1D"
         case .t2d: return "T2D"
         case .glp1: return "GLP-1"
+        case .gdm: return "GDM"
         }
     }
 
@@ -49,6 +52,7 @@ enum Cohort: String, Codable, CaseIterable, Identifiable {
         case .t1d: return "CGM, pump, insulin, supplies"
         case .t2d: return "CGM, oral meds, weight, labs"
         case .glp1: return "Weekly injections, weight, side effects"
+        case .gdm: return "CGM, carbs, weight, sometimes insulin"
         }
     }
 
@@ -57,6 +61,16 @@ enum Cohort: String, Codable, CaseIterable, Identifiable {
         case .t1d: return "drop.fill"
         case .t2d: return "pills.fill"
         case .glp1: return "syringe.fill"
+        case .gdm: return "stroller.fill"
+        }
+    }
+
+    /// True when this cohort may log insulin (basal/bolus). T1D always;
+    /// some GDM patients use insulin too. T2D/GLP-1 hide the insulin UI.
+    var supportsInsulinLogging: Bool {
+        switch self {
+        case .t1d, .gdm: return true
+        case .t2d, .glp1: return false
         }
     }
 }
@@ -133,6 +147,8 @@ class AuthManager {
         let tier: String
         let cohort: String?
         let role: String?
+        let npi: String?
+        let organization: String?
         let devices: [String: String]?
         let trial_ends_at: String?
     }
