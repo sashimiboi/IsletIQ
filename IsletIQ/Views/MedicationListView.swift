@@ -599,7 +599,11 @@ private struct DoseLogSheet: View {
                         }
                         .listRowBackground(Color.clear)
                     }
+                    #if os(iOS)
                     .listStyle(.insetGrouped)
+                    #else
+                    .listStyle(.inset)
+                    #endif
                 }
             }
             .background(Theme.bg)
